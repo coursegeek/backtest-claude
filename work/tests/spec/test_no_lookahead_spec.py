@@ -99,8 +99,8 @@ def test_signal_T_not_affect_return_T():
     for a, b in zip(sig.weeks[:2], quiet.weeks[:2]):      # up to and including week T
         assert a.nav_end == b.nav_end and a.trades == ()
     w1 = sig.weeks[1]
-    assert w1.ledger_after_trades.stocks == w1.ledger_start.stocks      # return T on pre-signal exposure
+    assert w1.ledger_after_signal.stocks == w1.ledger_start.stocks      # return T on pre-signal exposure
     w2 = sig.weeks[2]
     assert [t.reason.value for t in w2.trades] == ["signal_exit"] and w2.week_key == T + WEEK
-    assert w2.ledger_after_trades.stocks == w2.ledger_start.stocks * 0.5
+    assert w2.ledger_after_signal.stocks == w2.ledger_start.stocks * 0.5
     assert sig.weeks[2].nav_end != quiet.weeks[2].nav_end

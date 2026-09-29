@@ -53,7 +53,7 @@ def test_zero_cost_trades_conserve_nav(seed):
     """With 0 bps a signal trade by itself does not change NAV."""
     res = run_engine(scenario(seed, costs=CostModel()))
     for w in res.weeks:
-        assert abs(w.ledger_after_trades.nav - w.nav_start) <= EPS * w.nav_start
+        assert abs(w.ledger_after_signal.nav - w.nav_start) <= EPS * w.nav_start
 
 
 @pytest.mark.parametrize("seed", SEEDS)
@@ -67,7 +67,7 @@ def test_signal_trade_touches_only_its_sleeve(seed):
             allowed |= {t.asset, t.cash_component}
         for c in COMPONENTS:
             if c not in allowed:
-                assert getattr(w.ledger_after_trades, c) == getattr(w.ledger_start, c)
+                assert getattr(w.ledger_after_signal, c) == getattr(w.ledger_start, c)
 
 
 @pytest.mark.parametrize("seed", SEEDS)

@@ -59,3 +59,12 @@ class InsufficientHistoryError(BacktestError):
 
 class NotImplementedCommand(BacktestError):
     exit_code = 3
+
+
+class InsolvencyError(BacktestError):
+    """TAX-006 (D): the net liquidation value cannot cover the amounts due."""
+
+    def __init__(self, week, due: float, available: float):
+        self.week, self.due, self.available = week, due, available
+        super().__init__(f"insolvency in week {week}: amounts due {due!r} exceed the net "
+                         f"liquidation value {available!r} of the portfolio (TAX-006)")

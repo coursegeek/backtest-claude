@@ -318,9 +318,9 @@ class RunCalendar:
 
 
 class TradeReason(str, Enum):
-    """Reason codes of every trade (REP-004). Only the signal reasons are produced by the
-    current build; the others are reserved for rebalancing, sell_to_pay, walk-forward and
-    terminal settlement."""
+    """Reason codes of every trade (REP-004). The current build produces the signal,
+    calendar/band rebalance and sell_to_pay reasons; walk_forward_rebalance and
+    terminal_liquidation are reserved for walk-forward and terminal settlement."""
     SIGNAL_EXIT = "signal_exit"
     SIGNAL_REENTRY = "signal_reentry"
     CALENDAR_REBALANCE = "calendar_rebalance"
@@ -354,3 +354,46 @@ class Trade:
     realized_gain: Optional[float]  # sells only: net proceeds - cost basis (no tax here)
     confirm_week: Optional[dt.date] = None
     pipeline_step: int = 1
+    nominal_execution_week: Optional[dt.date] = None   # scheduled week of a signal execution
+
+
+@dataclass(frozen=True)
+class Payment:
+    """Cash leaving the portfolio (NAV outflow), e.g. a future annual tax or foundation admin
+    cost. Not a trade: no asset changes hands."""
+    week_key: dt.date
+    event_type: str
+    amount: float
+    pipeline_step: int
+    funding_source: str             # ledger component debited
+    context: str                    # e.g. sell_to_pay:A_rf_base, strategic_rebalance
+
+
+@dataclass(frozen=True)
+class RfTransfer:
+    """Book transfer between cash-like RF components; costs nothing (Q-017)."""
+    week_key: dt.date
+    source: str
+    destination: str
+    amount: float
+    reason: str
+    pipeline_step: int
+
+
+@dataclass(frozen=True)
+class RebalanceEvent:
+    week_key: dt.date               # actual execution week (step 3)
+    mode: str
+    reason: TradeReason
+    trigger_source_week: dt.date
+    nominal_execution_week: dt.date
+    nav_after_signal: float
+    amounts_due: float
+    nav_net_for_rebalance: float    # NAV_after_signal - amounts_due
+    planned_final_nav: float        # after costs and payment
+    realized_final_nav: float
+    transaction_costs: float
+    slippage: float
+    weights_before: dict
+    weights_after: dict
+    max_deviation: Optional[float] = None   # band trigger evidence

@@ -1,5 +1,5 @@
-"""`run` with tax.profile=none and signal-only on staged data (mechanics only; staged proxy
-files never serve as canonical-data evidence)."""
+"""`run` with tax.profile=none (signal-only and strategic rebalancing) on staged data
+(mechanics only; staged proxy files never serve as canonical-data evidence)."""
 import csv
 import datetime as dt
 import json
@@ -64,6 +64,49 @@ def test_run_is_deterministic(tmp_path):
         assert (a / name).read_bytes() == (b / name).read_bytes(), name
 
 
+def test_s07_band_rebalance_run(tmp_path):
+    """S07 mechanics: band 1 pp on staged data; every end-of-week breach is followed by a
+    band rebalance at the next retained week that restores the targets; weight_start_* in
+    weekly_portfolio.csv comes from the post-rebalance ledger (PORT-012, REP-013)."""
+    res = run_portfolio(cfg({"portfolio": {"rebalance": "band", "rebalance_band_pp": 1}},
+                            out=tmp_path / "a"))
+    eng, out = res.engine, res.output_dir
+    assert eng.rebalance_events and {t.reason.value for t in eng.trades} <= {
+        "signal_exit", "signal_reentry", "band_rebalance"}
+    for name in ("payments.csv", "rf_transfers.csv", "rebalance_events.csv"):
+        assert (out / name).is_file(), name
+    events = {e.week_key: e for e in eng.rebalance_events}
+    t = eng.weeks[0].ledger_before_returns.sleeve_weights().keys()
+    for prev, w in zip(eng.weeks, eng.weeks[1:]):
+        dev = max(abs(v - {"stocks": 0.6, "gold": 0.2, "btc": 0.2, "rf": 0.0}[s])
+                  for s, v in prev.ledger_end.sleeve_weights().items())
+        assert (w.week_key in events) == (dev >= 0.01 - 1e-12), w.week_key
+        if w.week_key in events:
+            assert events[w.week_key].trigger_source_week == prev.week_key
+            for s, v in w.ledger_before_returns.sleeve_weights().items():
+                assert abs(v - {"stocks": 0.6, "gold": 0.2, "btc": 0.2, "rf": 0.0}[s]) < 1e-12
+    rows = list(csv.DictReader((out / "weekly_portfolio.csv").open()))
+    for r, w in zip(rows, eng.weeks):
+        for s in t:
+            assert float(r[f"weight_start_{s}"]) == w.ledger_before_returns.sleeve_weights()[s]
+    b = run_portfolio(cfg({"portfolio": {"rebalance": "band", "rebalance_band_pp": 1}},
+                          out=tmp_path / "b")).output_dir
+    for name in ("weekly_portfolio.csv", "trades.csv", "rebalance_events.csv", "rf_transfers.csv",
+                 "payments.csv"):
+        assert (out / name).read_bytes() == (b / name).read_bytes(), name
+
+
+@pytest.mark.parametrize("mode,count", [("monthly", 102), ("quarterly", 34), ("yearly", 8),
+                                        ("weekly", 447)])
+def test_calendar_modes_run(mode, count):
+    """REB-006: Jan 2018 .. Jul 2026 has 103 months, 35 quarters, 9 years; the first record is
+    the initial allocation, so one fewer trigger each."""
+    eng = run_portfolio(cfg({"portfolio": {"rebalance": mode, "transaction_cost_bps": 10.0}}),
+                        write=False).engine
+    assert len(eng.rebalance_events) == count
+    assert all(t.transaction_cost > 0 for t in eng.trades)
+
+
 def test_run_costs_reduce_nav_monotonically():
     free = run_portfolio(cfg(), write=False).engine
     costly = run_portfolio(cfg({"portfolio": {"transaction_cost_bps": 25.0, "slippage_bps": 10.0}}),
@@ -74,8 +117,8 @@ def test_run_costs_reduce_nav_monotonically():
 
 @pytest.mark.parametrize("extra", [{"tax": {"profile": "individual_pl"}},
                                    {"tax": {"profile": "family_foundation_15"}},
-                                   {"portfolio": {"rebalance": "band", "rebalance_band_pp": 1}},
-                                   {"portfolio": {"rebalance": "monthly"}}])
+                                   {"tax": {"profile": "individual_pl"},
+                                    "portfolio": {"rebalance": "band", "rebalance_band_pp": 1}}])
 def test_unsupported_modes_are_refused(extra):
     with pytest.raises(NotImplementedCommand):
         run_portfolio(cfg(extra), write=False)

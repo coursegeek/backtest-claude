@@ -37,7 +37,7 @@ def test_proceeds_to_own_reserve():
     t = res.trades[0]
     assert (t.asset, t.cash_component, len(res.trades)) == ("stocks", "rf_reserve_stocks", 1)
     week = next(w for w in res.weeks if w.week_key == t.week_key)
-    before, after = week.ledger_start, week.ledger_after_trades
+    before, after = week.ledger_start, week.ledger_after_signal
     assert after.rf_reserve_stocks == before.rf_reserve_stocks + t.net_cash_flow
     for c in ("gold", "btc", "rf_base", "rf_reserve_gold", "rf_reserve_btc"):
         assert getattr(after, c) == getattr(before, c)

@@ -2,8 +2,9 @@
 
 Implemented in this build:
   * ``signals`` - signal-only analysis (NORM-012/NORM-020);
-  * ``run``     - portfolio backtest with tax.profile=none and portfolio.rebalance=signal-only.
-Everything else (taxes, calendar/band rebalancing, sell_to_pay, scans, optimize, tax-compare,
+  * ``run``     - portfolio backtest with tax.profile=none and every portfolio.rebalance mode
+                  (signal-only, weekly, monthly, quarterly, annually/yearly, band).
+Everything else (taxes, terminal settlement, metrics/summary, scans, optimize, tax-compare,
 walk-forward) resolves and validates its configuration and then stops with a clear
 NotImplementedCommand; no partial results are produced.
 """
@@ -23,8 +24,11 @@ from .errors import ConfigError, NotImplementedCommand
 from .manifest import build_manifest, run_timestamp
 from .costs import CostModel
 from .engine import EngineInputs, WeekMarket, run_engine
+from .rebalancing import hooks_from_config
 from .models import RISKY_ASSETS, Severity, ValidationIssue, canonical_assets
-from .reporting import (NORMALIZED_FIELDS, SIGNAL_FIELDS, TRADE_FIELDS, VALIDATION_FIELDS,
+from .reporting import (NORMALIZED_FIELDS, PAYMENT_FIELDS, REBALANCE_FIELDS, SIGNAL_FIELDS,
+                        TRADE_FIELDS, TRANSFER_FIELDS, VALIDATION_FIELDS, rebalance_rows,
+                        record_rows,
                         normalized_price_rows, normalized_return_rows, run_directory,
                         signal_rows, trade_rows, weekly_portfolio_fields, weekly_portfolio_rows,
                         write_csv, write_json)
@@ -145,10 +149,6 @@ def check_supported_run(cfg: ResolvedConfig) -> None:
         raise NotImplementedCommand(
             f"tax.profile={cfg.get('tax.profile')}: the tax module is not implemented in this "
             "build; only tax.profile=none is supported")
-    if cfg.get("portfolio.rebalance") != "signal-only":
-        raise NotImplementedCommand(
-            f"portfolio.rebalance={cfg.get('portfolio.rebalance')}: strategic rebalancing is not "
-            "implemented in this build; only signal-only is supported")
 
 
 def build_run(cfg: ResolvedConfig):
@@ -224,7 +224,8 @@ def build_run(cfg: ResolvedConfig):
                           targets=targets,
                           initial_capital=float(cfg.get("portfolio.initial_capital_pln")),
                           costs=CostModel.from_config(cfg),
-                          cost_basis_method=cfg.get("tax.individual.cost_basis"))
+                          cost_basis_method=cfg.get("tax.individual.cost_basis"),
+                          run_start=first)
     provs = (ff.provenance,) + tuple(series[a].provenance for a in assets)
     normalized = tuple(normalized_return_rows("stocks_return", ff_stock)
                        + normalized_return_rows("rf", ff_rf))
@@ -238,7 +239,7 @@ def build_run(cfg: ResolvedConfig):
 
 def run_portfolio(cfg: ResolvedConfig, write: bool = True, hooks=None) -> PortfolioRunResult:
     inputs, ctx = build_run(cfg)
-    result = run_engine(inputs, hooks)
+    result = run_engine(inputs, hooks if hooks is not None else hooks_from_config(cfg))
     ctx["report"].extend(result.issues)
     out = PortfolioRunResult(engine=result, **ctx)
     if write:
@@ -254,6 +255,11 @@ def write_portfolio_outputs(cfg: ResolvedConfig, res: PortfolioRunResult) -> Pat
     write_csv(out / "weekly_portfolio.csv", weekly_portfolio_fields(assets),
               weekly_portfolio_rows(res.engine, res.targets, assets))
     write_csv(out / "trades.csv", TRADE_FIELDS, trade_rows(res.engine.trades))
+    write_csv(out / "payments.csv", PAYMENT_FIELDS, record_rows(res.engine.payments, PAYMENT_FIELDS))
+    write_csv(out / "rf_transfers.csv", TRANSFER_FIELDS,
+              record_rows(res.engine.transfers, TRANSFER_FIELDS))
+    write_csv(out / "rebalance_events.csv", REBALANCE_FIELDS,
+              rebalance_rows(res.engine.rebalance_events))
     write_csv(out / "signals.csv", SIGNAL_FIELDS, signal_rows(res.engine.signal_records))
     write_csv(out / "validation_report.csv", VALIDATION_FIELDS, res.report.rows())
     write_csv(out / "weekly_normalized.csv", NORMALIZED_FIELDS, res.normalized)
@@ -265,6 +271,10 @@ def write_portfolio_outputs(cfg: ResolvedConfig, res: PortfolioRunResult) -> Pat
         "run_calendar_weeks": len(res.calendar.weeks),
         "common_calendar_gaps": [w.isoformat() for w in res.calendar.common_gaps],
         "dropped_weeks": [w.isoformat() for w in res.calendar.dropped],
+        "rebalance_mode": cfg.get("portfolio.rebalance"),
+        "skipped_signal_observations": [[a, w.isoformat()] for a, w in
+                                        res.engine.skipped_signal_observations],
+        "audit_outputs": ["payments.csv", "rf_transfers.csv", "rebalance_events.csv"],
         "not_implemented_outputs": ["summary.csv (metrics)", "tax_events.csv (taxes)"],
     })
     write_json(out / "data_manifest.json", manifest)
@@ -284,5 +294,5 @@ def dispatch(cfg: ResolvedConfig):
         strategic_targets(cfg)          # ALLOC-001: fail early without explicit targets
     raise NotImplementedCommand(
         f"command '{cmd}': configuration resolved and validated, but the portfolio engine is "
-        "not implemented in this build yet; use 'run' (tax.profile=none, signal-only), "
+        "not implemented in this build yet; use 'run' (tax.profile=none), "
         "'signals' or --print-config")

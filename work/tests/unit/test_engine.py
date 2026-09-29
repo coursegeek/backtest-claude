@@ -20,19 +20,19 @@ class Recorder(PipelineHooks):
         self.calls.append(("0",))
         return capital
 
-    def amounts_due(self, week, portfolio):
-        self.calls.append(("2", week))
+    def amounts_due(self, ctx, portfolio):
+        self.calls.append(("2", ctx.week))
         return AmountsDue()
 
-    def rebalance_or_fund(self, week, portfolio, due, targets):
-        self.calls.append(("3", week))
+    def rebalance_or_fund(self, ctx, portfolio, due):
+        self.calls.append(("3", ctx.week))
 
-    def immediate_taxes(self, week, portfolio, ledger_before_returns, market):
+    def immediate_taxes(self, ctx, portfolio, ledger_before_returns, market):
         assert portfolio.ledger != ledger_before_returns or market.rf_return == 0
-        self.calls.append(("5", week))
+        self.calls.append(("5", ctx.week))
 
-    def end_of_week(self, week, portfolio):
-        self.calls.append(("6", week))
+    def end_of_week(self, ctx, portfolio):
+        self.calls.append(("6", ctx.week))
 
 
 def test_pipeline_order_trace():
@@ -53,7 +53,7 @@ def test_pipeline_order_trace():
 def test_amounts_due_hook_default_refuses():
     """Step 2/3 extension points: amounts due without sell_to_pay is refused, not ignored."""
     class Due(PipelineHooks):
-        def amounts_due(self, week, portfolio):
+        def amounts_due(self, ctx, portfolio):
             return AmountsDue(1.0, (("test", 1.0),))
     with pytest.raises(NotImplementedCommand):
         run_engine(engine_inputs({"stocks": EXIT_THEN_REENTRY}, first=4, targets={"stocks": 1.0}), Due())
@@ -64,9 +64,9 @@ def test_hooks_can_trade_through_primitives():
     from src.models import TradeReason
 
     class Sell(PipelineHooks):
-        def rebalance_or_fund(self, week, portfolio, due, targets):
-            if week == inp.weeks[1]:
-                portfolio.sell(week, "stocks", 1000.0, TradeReason.CALENDAR_REBALANCE, "rf_base", step=3)
+        def rebalance_or_fund(self, ctx, portfolio, due):
+            if ctx.week == inp.weeks[1]:
+                portfolio.sell(ctx.week, "stocks", 1000.0, TradeReason.CALENDAR_REBALANCE, "rf_base", step=3)
     inp = engine_inputs({"stocks": [100.0] * 8}, first=4, targets={"stocks": 1.0})
     res = run_engine(inp, Sell())
     assert [(t.reason.value, t.pipeline_step, t.cash_component) for t in res.trades] == [
@@ -121,10 +121,10 @@ def test_reentry_uses_only_own_reserve():
                                    costs=CostModel(20.0, 10.0), rf=0.001))
     buy = next(t for t in res.trades if t.reason.value == "signal_reentry")
     w = next(x for x in res.weeks if x.week_key == buy.week_key)
-    assert buy.reserve_after == 0.0 and w.ledger_after_trades.rf_reserve_stocks == 0.0
+    assert buy.reserve_after == 0.0 and w.ledger_after_signal.rf_reserve_stocks == 0.0
     assert abs(buy.gross_traded_value * 1.003 - buy.reserve_before) < 1e-6
     for c in ("gold", "rf_base", "rf_reserve_gold"):
-        assert getattr(w.ledger_after_trades, c) == getattr(w.ledger_start, c)
+        assert getattr(w.ledger_after_signal, c) == getattr(w.ledger_start, c)
 
 
 def test_no_repeat_sell_in_risk_off():
@@ -141,7 +141,7 @@ def test_target_fraction_of_sleeve():
                                    params=p))
     t = res.trades[0]
     w = next(x for x in res.weeks if x.week_key == t.week_key)
-    assert abs(w.ledger_after_trades.stocks - 0.7 * w.ledger_after_trades.sleeve("stocks")) < 1e-6
+    assert abs(w.ledger_after_signal.stocks - 0.7 * w.ledger_after_signal.sleeve("stocks")) < 1e-6
 
 
 def test_rf_components_share_rf_return():
@@ -151,7 +151,7 @@ def test_rf_components_share_rf_return():
                                    targets={"stocks": 0.6, "gold": 0.2, "rf": 0.2}, rf=0.01))
     w = res.weeks[0]
     for c in ("rf_base", "rf_reserve_stocks", "rf_reserve_gold"):
-        assert getattr(w.ledger_end, c) == getattr(w.ledger_after_trades, c) * 1.01
+        assert getattr(w.ledger_end, c) == getattr(w.ledger_before_returns, c) * 1.01
 
 
 def test_signal_and_return_series_separate():

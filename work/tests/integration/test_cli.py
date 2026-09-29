@@ -82,3 +82,19 @@ def test_missing_data_file_error(tmp_path):
     """ERR-001 through the CLI."""
     r = cli("signals", "--asset", "gold", "--gold-file", str(tmp_path / "none.csv"))
     assert r.returncode == 1 and "data.gold_file" in r.stderr and "none.csv" in r.stderr
+
+
+def test_cli_009_band_rebalance(tmp_path):
+    """CLI-009 (mechanics on staged data): the band 1 pp command runs end-to-end from the CLI
+    and writes the rebalance audit files. summary.csv (metrics) is not implemented yet."""
+    r = cli("run", "--weights", "stocks=0.6,gold=0.2,btc=0.2", "--rebalance", "band",
+            "--rebalance-band-pp", "1", "--start", "2018-01-01", "--end", "2026-07-31",
+            "--as-of-date", "2026-09-29", "--output-dir", str(tmp_path))
+    assert r.returncode == 0, r.stderr
+    out = next(tmp_path.iterdir())
+    resolved = yaml.safe_load((out / "config_resolved.yaml").read_text())
+    assert resolved["portfolio"]["rebalance"] == "band"
+    assert resolved["portfolio"]["rebalance_band_pp"] == 1
+    events = (out / "rebalance_events.csv").read_text().splitlines()
+    assert len(events) > 1 and all(",band,band_rebalance," in e for e in events[1:])
+    assert "band_rebalance" in (out / "trades.csv").read_text()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import datetime as dt
 import json
+import math
 from enum import Enum
 from pathlib import Path
 
@@ -77,7 +78,14 @@ def normalized_price_rows(series) -> list:
 TRADE_FIELDS = ["week_key", "asset", "side", "reason", "gross_traded_value", "transaction_cost",
                 "slippage", "net_cash_flow", "asset_value_before", "asset_value_after",
                 "reserve_before", "reserve_after", "cash_component", "units", "cost_basis",
-                "realized_gain", "confirm_week", "pipeline_step"]
+                "realized_gain", "confirm_week", "nominal_execution_week", "pipeline_step"]
+PAYMENT_FIELDS = ["week_key", "event_type", "amount", "pipeline_step", "funding_source", "context"]
+TRANSFER_FIELDS = ["week_key", "source", "destination", "amount", "reason", "pipeline_step"]
+REBALANCE_FIELDS = ["week_key", "mode", "reason", "trigger_source_week", "nominal_execution_week",
+                    "nav_after_signal", "amounts_due", "nav_net_for_rebalance",
+                    "planned_final_nav", "realized_final_nav", "transaction_costs", "slippage",
+                    "max_deviation"] + [f"weight_before_{s}" for s in ("stocks", "gold", "btc", "rf")] \
+                   + [f"weight_after_{s}" for s in ("stocks", "gold", "btc", "rf")]
 LEDGER_COMPONENTS = ("stocks", "gold", "btc", "rf_base", "rf_reserve_stocks", "rf_reserve_gold",
                      "rf_reserve_btc")
 SLEEVES = ("stocks", "gold", "btc", "rf")
@@ -93,28 +101,45 @@ def normalized_return_rows(role, points) -> list:
              "flags": p.flags} for p in points]
 
 
+def record_rows(records, fields) -> list:
+    return [{k: getattr(r, k) for k in fields} for r in records]
+
+
+def rebalance_rows(events) -> list:
+    rows = []
+    for e in events:
+        r = {k: getattr(e, k) for k in REBALANCE_FIELDS if hasattr(e, k)}
+        for s in SLEEVES:
+            r[f"weight_before_{s}"] = e.weights_before[s]
+            r[f"weight_after_{s}"] = e.weights_after[s]
+        rows.append(r)
+    return rows
+
+
 def weekly_portfolio_fields(assets) -> list:
-    """REP-003/REP-013: NAV, component values, weights actually used for the week's return
-    (after start-of-week trades), end-of-week actual weights, strategic targets, returns,
-    trades, costs, amounts due and the effective signal state of every active asset."""
-    return (["week_key", "nav_start", "nav_after_trades", "nav_end", "portfolio_return"]
+    """REP-003/REP-013: NAV at each pipeline boundary, component values, the weights used for
+    the week's return (after ALL start-of-week transactions and payments = ledger_before_returns,
+    PORT-012), end-of-week actual weights, strategic targets, returns, trades, costs, payments
+    and the effective signal state of every active asset."""
+    return (["week_key", "nav_start", "nav_after_signal", "nav_before_returns", "nav_end",
+             "portfolio_return"]
             + [f"value_{c}" for c in LEDGER_COMPONENTS]
             + [f"weight_start_{s}" for s in SLEEVES] + [f"weight_end_{s}" for s in SLEEVES]
             + [f"target_{s}" for s in SLEEVES]
             + [f"return_{a}" for a in ("stocks", "gold", "btc")] + ["return_rf"]
             + ["trades", "traded_value", "transaction_costs", "slippage", "amounts_due",
-               "taxes_paid"] + [f"state_{a}" for a in assets])
+               "payments", "rebalance", "taxes_paid"] + [f"state_{a}" for a in assets])
 
 
 def weekly_portfolio_rows(result, targets, assets) -> list:
     rows = []
     for w in result.weeks:
-        r = {"week_key": w.week_key, "nav_start": w.nav_start,
-             "nav_after_trades": w.ledger_after_trades.nav, "nav_end": w.nav_end,
+        r = {"week_key": w.week_key, "nav_start": w.nav_start, "nav_after_signal": w.nav_after_signal,
+             "nav_before_returns": w.nav_before_returns, "nav_end": w.nav_end,
              "portfolio_return": w.portfolio_return}
         for c, v in w.ledger_end.components().items():
             r[f"value_{c}"] = v
-        for s, v in w.ledger_after_trades.sleeve_weights().items():
+        for s, v in w.ledger_before_returns.sleeve_weights().items():
             r[f"weight_start_{s}"] = v
         for s, v in w.ledger_end.sleeve_weights().items():
             r[f"weight_end_{s}"] = v
@@ -124,10 +149,12 @@ def weekly_portfolio_rows(result, targets, assets) -> list:
             r[f"return_{a}"] = w.market.asset_returns.get(a)
         r["return_rf"] = w.market.rf_return
         r["trades"] = len(w.trades)
-        r["traded_value"] = sum(t.gross_traded_value for t in w.trades)
-        r["transaction_costs"] = sum(t.transaction_cost for t in w.trades)
-        r["slippage"] = sum(t.slippage for t in w.trades)
+        r["traded_value"] = math.fsum(t.gross_traded_value for t in w.trades)
+        r["transaction_costs"] = math.fsum(t.transaction_cost for t in w.trades)
+        r["slippage"] = math.fsum(t.slippage for t in w.trades)
         r["amounts_due"] = w.amounts_due.total
+        r["payments"] = math.fsum(p.amount for p in w.payments)
+        r["rebalance"] = w.rebalance.reason if w.rebalance else ""
         r["taxes_paid"] = 0.0
         for a in assets:
             r[f"state_{a}"] = w.effective_states[a]

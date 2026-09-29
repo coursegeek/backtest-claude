@@ -33,3 +33,12 @@ def test_layering():
     assert imports("signals") <= {"models"}
     assert imports("calendar") == set()
     assert "engine" not in imports("validation") and "cli" not in imports("data_loader")
+
+
+def test_rebalancing_and_funding_are_separate_layers():
+    """Rebalancing and sell_to_pay extend the central engine through its hooks and primitives:
+    the engine does not know them, and neither touches loading, reporting or the CLI."""
+    assert not imports("engine") & {"rebalancing", "sell_to_pay", "app", "reporting"}
+    for mod in ("rebalancing", "sell_to_pay"):
+        assert not imports(mod) & {"data_loader", "reporting", "app", "cli", "validation"}
+    assert "rebalancing" not in imports("sell_to_pay")

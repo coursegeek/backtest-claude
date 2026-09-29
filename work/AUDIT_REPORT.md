@@ -199,7 +199,7 @@ Repozytorium jest gotowe do rozpoczęcia implementacji warstw niezależnych od b
 6 blokerów; do tego czasu odpowiadające im wiersze pozostają `BLOCKED`, a V2 będzie emitować
 jawne ostrzeżenia lub czytelne błędy zamiast cichych założeń.
 
-## 12. Adjudykacje użytkownika (sesja 2)
+## 12. Adjudykacje użytkownika (sesje 2–4)
 
 | Pytanie | Status | Skutek |
 |---|---|---|
@@ -214,6 +214,8 @@ jawne ostrzeżenia lub czytelne błędy zamiast cichych założeń.
 | Q-019 stan początkowy (sesja 3) | RESOLVED | Stan potwierdzony ≠ efektywny; split z efektywnego; wykonania ≥ start pozostają pending i są transakcjami w backteście. |
 | Q-049 tożsamość NAV (sesja 3) | RESOLVED | `abs(NAV - sum(components)) / max(1, abs(NAV)) <= 1e-10`; NAV z komponentów przez `math.fsum`. |
 | Q-050 SMA przez lukę (sesja 3) | RESOLVED | SMA z ostatnich `ma` dostępnych obserwacji; luka flagowana, przerywa liczniki, nie zeruje historii SMA; warm-up liczy obserwacje. |
+| Q-039 liczba rebalancingów (sesja 4) | RESOLVED | Trigger kalendarzowy: pierwszy zachowany rekord, którego Friday week_key jest w nowym miesiącu/kwartale/roku względem poprzedniego zachowanego rekordu; pierwszy rekord = alokacja początkowa (nie rebalance); `weekly` = każdy zachowany tydzień od drugiego; rebalance w kroku 3 tygodnia triggera. Band: wszystkie sleeve'y (stocks, gold, btc z rezerwami, rf_base) na końcu T, `>= band_pp/100`, wykonanie na początku następnego zachowanego tygodnia. |
+| Q-046 sell_to_pay (sesja 4) | RESOLVED | Wartości po kroku 1; A rf_base → B rezerwy pro rata → C stocks/gold/btc pro rata do wartości rynkowych z gross-up `N/(1-c)` ograniczonym do pozycji; każda sprzedaż aktualizuje cost basis i realizację; stan sygnału bez zmian; insolvency, gdy wartość likwidacyjna netto < należność; wynik niezależny od kolejności kluczy. |
 
 Wiersze MUST nadal `BLOCKED` (dane niekanoniczne): SEM-001, SEM-003, SCHEMA-005, SEM-007, TEST-038.
 
@@ -225,7 +227,14 @@ Wiersze MUST nadal `BLOCKED` (dane niekanoniczne): SEM-001, SEM-003, SCHEMA-005,
   (`ledger`, `costs`, `rf`, `cost_basis`, `engine`), pipeline PORT-011 z rzeczywistymi punktami
   rozszerzeń dla kroków 0/2/3/5/6, komenda `run` dla `tax.profile=none` i `signal-only`.
 
-Stan macierzy: MUST — 165 `PASS`, 29 `IN_PROGRESS`, 153 `MAPPED`, 5 `BLOCKED` (DATA BLOCKER),
+* Sesja 4: rebalancing strategiczny (`src/rebalancing.py`: signal-only, weekly, monthly,
+  quarterly, annually/yearly, band) i sell_to_pay (`src/sell_to_pay.py`) jako hooki kroku 3/6
+  centralnego silnika; płatności (`Payment`) i transfery RF (`RfTransfer`) jako osobne zdarzenia;
+  jawne `ledger_after_signal` / `ledger_before_returns`; tygodnie usunięte przez
+  `missing.return_policy=drop` są poza osią czasu portfela (ich obserwacje sygnałowe nie trafiają
+  do maszyny stanów runu). Kwoty należne w testach są syntetyczne — moduł podatkowy nie istnieje.
+
+Stan macierzy: MUST — 177 `PASS`, 28 `IN_PROGRESS`, 142 `MAPPED`, 5 `BLOCKED` (DATA BLOCKER),
 0 `FAIL`; SHOULD — 10 `PASS`. Testy: `python -m pytest work` (wszystkie przechodzą). Żaden wiersz
 zablokowany przez Q-002/Q-004/Q-008 nie został oznaczony `PASS` na podstawie staged plików;
 dowody dla LBMA, segmentów SEM-001 i kanonicznego SCHEMA-005 pochodzą z syntetycznych fixture'ów.
@@ -238,9 +247,9 @@ questions_total=50
 blockers=6
 major=20
 minor=24
-must_mapped=153
+must_mapped=142
 must_blocked=5
-must_pass=165
+must_pass=177
 should_proposed_deferral=1
 input_checks=58
 checks_fail=12
@@ -252,9 +261,9 @@ scenarios_feasible=10
 scenarios_needs_decision=10
 blocker_ids=Q-002,Q-004,Q-005,Q-008,Q-012,Q-020
 data_blocker_ids=Q-002,Q-004,Q-008
-resolved_ids=Q-005,Q-006,Q-012,Q-017,Q-019,Q-020,Q-049,Q-050
-open_questions=39
+resolved_ids=Q-005,Q-006,Q-012,Q-017,Q-019,Q-020,Q-039,Q-046,Q-049,Q-050
+open_questions=37
 must_fail=0
-must_in_progress=29
+must_in_progress=28
 should_pass=10
 -->

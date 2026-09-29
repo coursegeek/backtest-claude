@@ -108,7 +108,8 @@ COMMAND_DEFAULTS: dict = {
 ENUMS = {
     "engine.frequency": {"weekly"},
     "portfolio.currency": {"PLN"},
-    "portfolio.rebalance": {"weekly", "monthly", "quarterly", "annually", "band", "signal-only"},
+    "portfolio.rebalance": {"weekly", "monthly", "quarterly", "annually", "yearly", "band",
+                            "signal-only"},          # yearly = alias of annually (Q-039)
     "validation.duplicates": {"error", "last", "first"},
     "validation.numeric": {"error", "source_policy"},
     "missing.return_policy": {"error", "drop"},
