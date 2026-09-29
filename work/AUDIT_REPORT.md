@@ -28,11 +28,13 @@ Core engine nie został napisany; powstały wyłącznie narzędzia audytowe, rap
 | MUST | 352 |
 | SHOULD | 27 |
 | Pytania/konflikty ogółem | 49 |
-| **BLOCKER** | **6** (Q-002, Q-004, Q-005, Q-008, Q-012, Q-020) |
+| **BLOCKER** (severity z audytu) | **6** (Q-002, Q-004, Q-005, Q-008, Q-012, Q-020) |
+| — po adjudykacji: DATA BLOCKER | 3 (Q-002, Q-004, Q-008) |
+| — po adjudykacji: RESOLVED | 3 blokery (Q-005, Q-012, Q-020) + Q-006 |
 | **MAJOR** | **20** |
 | MINOR | 23 |
-| MUST zmapowane bez blokera (`MAPPED`) | 340 |
-| MUST zablokowane decyzją (`BLOCKED`) | 12 |
+| MUST zmapowane bez blokera (`MAPPED`) | 340 w audycie → 347 po adjudykacji |
+| MUST zablokowane decyzją (`BLOCKED`) | 12 w audycie → 5 po adjudykacji (tylko DATA BLOCKER) |
 | MUST `PASS` | 0 (nic nie jest jeszcze zaimplementowane) |
 | SHOULD proponowane do odroczenia | 1 (ERR-007 cache) |
 | Kontrole danych | 58: 27 PASS, 12 FAIL, 14 WARN, 5 INFO |
@@ -66,7 +68,7 @@ No-look-ahead na tych danych jest spełnialne: każda obserwacja ma jednoznaczny
 kalendarzowy i znany moment dostępności (piątek; BTC niedziela). Jedyna luka w regule
 specyfikacji dotyczy kompletności BTC przy `as_of` w piątek/sobotę (Q-007).
 
-## 4. Blokery (6)
+## 4. Blokery (6) — stan po adjudykacji w sekcji 12
 
 1. **Q-002 — złoto nie jest LBMA PM i zaczyna się w 1970** (SEM-003, DATA-003, SIG-009).
    Mechanika (ta sama seria dla sygnału i zwrotu) jest implementowalna, ale SEM-003 nie przejdzie.
@@ -148,9 +150,9 @@ specyfikacji dotyczy kompletności BTC przy `as_of` w piątek/sobotę (Q-007).
 
 ## 8. Co jest obecnie zablokowane konfliktem specyfikacji z danymi
 
-* 12 wierszy MUST ze statusem `BLOCKED`: SEM-003 (Q-002); SEM-001 (Q-004); SCHEMA-004, SEM-008,
-  TEST-039 (Q-005); SCHEMA-005, SEM-007 (Q-008); NORM-004, NORM-005, NORM-010, SIG-003 (Q-012);
-  CLI-011 (Q-020). Ich implementacja jest możliwa, ale `PASS` wymaga decyzji.
+* Audyt: 12 wierszy MUST `BLOCKED`. Po adjudykacji (sekcja 12) zostaje 5 wierszy MUST `BLOCKED`
+  przez DATA BLOCKER: SEM-003 (Q-002); SEM-001 (Q-004); SCHEMA-005, SEM-007, TEST-038 (Q-008).
+  Pozostałe (Q-005, Q-012, Q-020) są rozstrzygnięte i wróciły do `MAPPED`.
 * Scenariusze wymagające decyzji (z `scenario_feasibility.csv`):
 
 | Scenariusz | Problem | Pytania |
@@ -197,6 +199,20 @@ Repozytorium jest gotowe do rozpoczęcia implementacji warstw niezależnych od b
 6 blokerów; do tego czasu odpowiadające im wiersze pozostają `BLOCKED`, a V2 będzie emitować
 jawne ostrzeżenia lub czytelne błędy zamiast cichych założeń.
 
+## 12. Adjudykacje użytkownika (sesja 2)
+
+| Pytanie | Status | Skutek |
+|---|---|---|
+| Q-002 złoto | DATA_BLOCKER | Loader/sygnał/zwrot wg LBMA PM (DATA-003, SIG-009, SEM-003) testowane syntetycznym LBMA; staged TVC/OANDA tylko jako jawne proxy (`canonical=false`). SEM-003 pozostaje BLOCKED. |
+| Q-004 splice akcji | DATA_BLOCKER | Wsparcie segmentów źródłowych i kanonicznej kompozycji Schwert < 1928 + SPX ≥ 1928 z rebasingiem; staged plik z ostrzeżeniem o provenance. SEM-001 pozostaje BLOCKED. |
+| Q-005 BTC | RESOLVED | Normalizacja raw Monday→Friday (`week_key = source_week_start + 4`, `available_at = close_date = week_key + 2`), zakres kanoniczny 2011-07-08..2026-09-18 (794 wiersze). |
+| Q-006 zakres BTC | RESOLVED | Wynika z Q-005. |
+| Q-008 dywidendy | DATA_BLOCKER | Loader kanoniczny wymaga pełnego SCHEMA-005; staged plik tylko przez adapter proxy. SCHEMA-005, SEM-007 i TEST-038 pozostają BLOCKED. |
+| Q-012 luki kalendarza | RESOLVED | Cała historia do rekonstrukcji; luka tygodnia przerywa liczniki confirmation; brak auto forward-fill; polityki `error/drop/carry` tylko dla brakującego źródła w tygodniu kalendarza runu; wspólne luki raportowane. |
+| Q-020 walk-forward | RESOLVED | `train_years=15` bez skracania; brak pełnego okna → „insufficient history for requested walk-forward training window”. |
+
+Wiersze MUST nadal `BLOCKED` (dane niekanoniczne): SEM-001, SEM-003, SCHEMA-005, SEM-007, TEST-038.
+
 <!-- AUDIT_COUNTS
 requirements_total=379
 must=352
@@ -205,8 +221,8 @@ questions_total=49
 blockers=6
 major=20
 minor=23
-must_mapped=340
-must_blocked=12
+must_mapped=347
+must_blocked=5
 must_pass=0
 should_proposed_deferral=1
 input_checks=58
@@ -218,4 +234,8 @@ scenarios_total=20
 scenarios_feasible=10
 scenarios_needs_decision=10
 blocker_ids=Q-002,Q-004,Q-005,Q-008,Q-012,Q-020
+data_blocker_ids=Q-002,Q-004,Q-008
+resolved_ids=Q-005,Q-006,Q-012,Q-020
+open_questions=42
+must_fail=0
 -->

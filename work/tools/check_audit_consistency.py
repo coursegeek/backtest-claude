@@ -47,6 +47,7 @@ STATUSES = {"NOT_STARTED", "MAPPED", "BLOCKED", "PROPOSED_DEFERRAL", "DEFERRED",
 Q_COLS = ["question_id", "requirement_id", "severity", "source_file", "specification_requirement",
           "observed_data", "issue", "proposed_interpretation", "blocks_implementation",
           "confidence", "status"]
+Q_STATUSES = {"OPEN", "ANSWERED", "RESOLVED", "WITHDRAWN", "DATA_BLOCKER"}
 TEST_DIRS = ("tests/spec/", "tests/unit/", "tests/property/", "tests/integration/")
 PLAN_CONCERNS = [
     "loading", "normalization", "calendar", "information availability", "validation", "signals",
@@ -146,7 +147,7 @@ def main() -> int:
             err(f"{qid}: bad severity {q['severity']}")
         if q["confidence"] not in {"HIGH", "MEDIUM", "LOW"}:
             err(f"{qid}: bad confidence {q['confidence']}")
-        if q["status"] not in {"OPEN", "ANSWERED", "RESOLVED", "WITHDRAWN"}:
+        if q["status"] not in Q_STATUSES:
             err(f"{qid}: bad status {q['status']}")
         if not re.match(r"^(YES|NO|PARTIAL)\b", q["blocks_implementation"]):
             err(f"{qid}: blocks_implementation must start with YES/NO/PARTIAL")
@@ -172,8 +173,9 @@ def main() -> int:
                 err(f"matrix {r['requirement_id']}: {qid} does not list this requirement")
         if r["status"] == "BLOCKED":
             if not any(q_by_id.get(x, {}).get("severity") == "BLOCKER"
+                       and q_by_id[x]["status"] in {"OPEN", "DATA_BLOCKER"}
                        for x in split_ids(r["question_ids"])):
-                err(f"matrix {r['requirement_id']}: BLOCKED without a BLOCKER question")
+                err(f"matrix {r['requirement_id']}: BLOCKED without an unresolved BLOCKER question")
     for c in checks:
         if c["result"] in {"FAIL", "WARN"}:
             refs = split_ids(c["question_ids"])
@@ -240,6 +242,10 @@ def main() -> int:
             "scenarios_total": len(scen), "scenarios_feasible": st["FEASIBLE"],
             "scenarios_needs_decision": st["NEEDS_DECISION"],
             "blocker_ids": ",".join(q["question_id"] for q in questions if q["severity"] == "BLOCKER"),
+            "data_blocker_ids": ",".join(q["question_id"] for q in questions if q["status"] == "DATA_BLOCKER"),
+            "resolved_ids": ",".join(q["question_id"] for q in questions if q["status"] == "RESOLVED"),
+            "open_questions": sum(1 for q in questions if q["status"] == "OPEN"),
+            "must_fail": sum(1 for r in matrix if r["priority"] == "MUST" and r["status"] == "FAIL"),
         }
         for k, v in actual.items():
             if k not in claimed:
