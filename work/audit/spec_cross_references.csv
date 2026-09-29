@@ -1,0 +1,25 @@
+from_id,from_priority,to_id,to_priority,kind,evidence
+CLI-005,MUST,DIV-009,SHOULD,implicit_should_dependency,mentions option --dividend-tax-mode
+CLI-006,MUST,META-005,SHOULD,implicit_should_dependency,mentions option --config
+DATA-004,MUST,REAL-005,SHOULD,implicit_should_dependency,same config_key data.cpi_file; mentions option --cpi-file
+DEF-026,MUST,IND-010,SHOULD,implicit_should_dependency,same config_key tax.individual.loss_carryforward_years
+DIV-001,MUST,DIV-009,SHOULD,implicit_should_dependency,mentions option --dividend-tax-mode
+FND-005,MUST,FND-009,SHOULD,implicit_should_dependency,allowed value distribution_schedule needs the schedule input defined only by FND-009
+FND-011,MUST,PORT-011,MUST,explicit_id,logic_formula mentions PORT-011
+FND-011,MUST,TAX-006,MUST,explicit_id,logic_formula mentions TAX-006
+IND-006,MUST,PORT-011,MUST,explicit_id,logic_formula mentions PORT-011
+IND-006,MUST,TAX-006,MUST,explicit_id,logic_formula mentions TAX-006
+NORM-010,MUST,SIG-017,SHOULD,implicit_should_dependency,mentions key fragment confirm_off_weeks
+NORM-020,MUST,NORM-019,MUST,explicit_id,logic_formula mentions NORM-019
+PORT-011,MUST,TAX-006,MUST,explicit_id,logic_formula mentions TAX-006
+REB-011,MUST,REB-003,MUST,explicit_id,logic_formula mentions REB-003
+REB-011,MUST,REB-004,MUST,explicit_id,logic_formula mentions REB-004
+REPRO-006,MUST,OPT-009,SHOULD,implicit_should_dependency,identical optimizer output requires a deterministic tie-break
+SEM-002,MUST,NORM-013,MUST,explicit_id,notes mentions NORM-013
+SIG-018,MUST,RISK-008,SHOULD,implicit_should_dependency,mentions value sell_fraction_current; mentions value target_fraction_of_sleeve
+TAX-006,MUST,PORT-011,MUST,explicit_id,notes mentions PORT-011
+TEST-034,MUST,IND-010,SHOULD,implicit_should_dependency,TEST-034 verifies the 5-year carry-forward defined by IND-010
+TEST-044,MUST,DATA-010,SHOULD,implicit_should_dependency,TEST-044 verifies the FF ZIP behaviour defined only by DATA-010
+TEST-046,MUST,PORT-011,MUST,explicit_id,requirement mentions PORT-011
+TEST-046,MUST,TAX-006,MUST,explicit_id,acceptance_criteria mentions TAX-006
+WF-012,MUST,WF-015,MUST,explicit_id,logic_formula mentions WF-015

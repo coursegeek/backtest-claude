@@ -1,0 +1,487 @@
+{
+  "spec_file": "input/python_backtest_specification_v3_1.csv",
+  "rows": 379,
+  "priority_counts": {
+    "MUST": 352,
+    "SHOULD": 27
+  },
+  "sections": {
+    "00_META": {
+      "MUST": 7,
+      "SHOULD": 1
+    },
+    "01_ARCHITECTURE": {
+      "MUST": 0,
+      "SHOULD": 10
+    },
+    "02_INPUT_DATA": {
+      "MUST": 8,
+      "SHOULD": 2
+    },
+    "03_INPUT_SCHEMA": {
+      "MUST": 7,
+      "SHOULD": 0
+    },
+    "04_DATA_NORMALIZATION": {
+      "MUST": 20,
+      "SHOULD": 0
+    },
+    "05A_ALLOCATION": {
+      "MUST": 4,
+      "SHOULD": 0
+    },
+    "05_RUN_RANGE": {
+      "MUST": 4,
+      "SHOULD": 0
+    },
+    "06_SIGNALS": {
+      "MUST": 17,
+      "SHOULD": 2
+    },
+    "07_DELAY_SCAN": {
+      "MUST": 5,
+      "SHOULD": 0
+    },
+    "08_THRESHOLD_SCAN": {
+      "MUST": 5,
+      "SHOULD": 0
+    },
+    "09_RISK_OFF": {
+      "MUST": 7,
+      "SHOULD": 1
+    },
+    "10_ALLOCATION_OPT": {
+      "MUST": 9,
+      "SHOULD": 1
+    },
+    "11_REBALANCING": {
+      "MUST": 11,
+      "SHOULD": 0
+    },
+    "12_PORTFOLIO": {
+      "MUST": 14,
+      "SHOULD": 0
+    },
+    "13_DIVIDENDS": {
+      "MUST": 11,
+      "SHOULD": 1
+    },
+    "14_TAX_GENERAL": {
+      "MUST": 7,
+      "SHOULD": 0
+    },
+    "15_TAX_INDIVIDUAL": {
+      "MUST": 19,
+      "SHOULD": 1
+    },
+    "16_TAX_FOUNDATION": {
+      "MUST": 15,
+      "SHOULD": 1
+    },
+    "18_REAL_RETURNS": {
+      "MUST": 4,
+      "SHOULD": 1
+    },
+    "19_METRICS": {
+      "MUST": 24,
+      "SHOULD": 2
+    },
+    "20_REPORTING": {
+      "MUST": 18,
+      "SHOULD": 1
+    },
+    "21_REPRODUCIBILITY": {
+      "MUST": 7,
+      "SHOULD": 0
+    },
+    "22_WALK_FORWARD": {
+      "MUST": 15,
+      "SHOULD": 1
+    },
+    "23_CLI_EXAMPLES": {
+      "MUST": 11,
+      "SHOULD": 0
+    },
+    "24_TESTS": {
+      "MUST": 54,
+      "SHOULD": 0
+    },
+    "25_ERRORS_PERFORMANCE": {
+      "MUST": 5,
+      "SHOULD": 2
+    },
+    "26_DEFAULTS": {
+      "MUST": 33,
+      "SHOULD": 0
+    },
+    "27_DATA_SEMANTICS": {
+      "MUST": 11,
+      "SHOULD": 0
+    }
+  },
+  "test_rows": 54,
+  "test_ids_first_last": [
+    "TEST-001",
+    "TEST-054"
+  ],
+  "commands_declared": [
+    "delay-scan",
+    "optimize",
+    "tax-compare",
+    "threshold-scan"
+  ],
+  "commands_in_examples": [
+    "delay-scan",
+    "optimize",
+    "rebalance-scan",
+    "run",
+    "tax-compare",
+    "threshold-scan"
+  ],
+  "output_files": {
+    "config_resolved.yaml": [
+      "META-005",
+      "ALLOC-001",
+      "REP-007",
+      "REPRO-007"
+    ],
+    "data_manifest.json": [
+      "REP-008",
+      "REPRO-001",
+      "REPRO-002",
+      "REPRO-003",
+      "REPRO-004",
+      "REPRO-005",
+      "REPRO-007"
+    ],
+    "grid_results.csv": [
+      "DELAY-002",
+      "DELAY-005",
+      "THR-002",
+      "OPT-008",
+      "OPT-010",
+      "REB-010",
+      "REP-010",
+      "WF-005"
+    ],
+    "rolling_metrics.csv": [
+      "MET-022",
+      "MET-023"
+    ],
+    "signals.csv": [
+      "SIG-001",
+      "SIG-003",
+      "SIG-011",
+      "REP-006",
+      "REP-014"
+    ],
+    "summary.csv": [
+      "META-006",
+      "NORM-011",
+      "REB-005",
+      "IND-016",
+      "FND-008",
+      "FND-015",
+      "REAL-001",
+      "REAL-004",
+      "MET-001",
+      "MET-002",
+      "MET-003",
+      "MET-004",
+      "MET-005",
+      "MET-006",
+      "MET-007",
+      "MET-008",
+      "MET-009",
+      "MET-010",
+      "MET-011",
+      "MET-012",
+      "MET-013",
+      "MET-014",
+      "MET-015",
+      "MET-016",
+      "MET-017",
+      "MET-018",
+      "MET-019",
+      "MET-020",
+      "MET-021",
+      "MET-025",
+      "MET-026",
+      "REP-002",
+      "REP-012",
+      "REP-017",
+      "REP-018",
+      "REP-019"
+    ],
+    "tax_events.csv": [
+      "PORT-008",
+      "DIV-005",
+      "DIV-011",
+      "TAX-004",
+      "IND-001",
+      "IND-002",
+      "IND-014",
+      "IND-019",
+      "FND-001",
+      "FND-003",
+      "FND-004",
+      "FND-015",
+      "REP-005",
+      "REP-015"
+    ],
+    "trades.csv": [
+      "REP-004"
+    ],
+    "validation_report.csv": [
+      "NORM-001",
+      "NORM-002",
+      "NORM-003",
+      "NORM-004",
+      "NORM-005",
+      "NORM-006",
+      "NORM-014",
+      "NORM-015",
+      "NORM-019",
+      "DIV-012",
+      "REAL-002",
+      "REP-009",
+      "REP-018",
+      "SEM-010"
+    ],
+    "walk_forward_results.csv": [
+      "REP-016",
+      "WF-004",
+      "WF-013",
+      "WF-015",
+      "WF-016"
+    ],
+    "weekly_normalized.csv": [
+      "NORM-007"
+    ],
+    "weekly_portfolio.csv": [
+      "PORT-005",
+      "PORT-006",
+      "PORT-007",
+      "PORT-013",
+      "FND-010",
+      "REP-003",
+      "REP-013"
+    ]
+  },
+  "cli_options_defined": {
+    "--as-of-date": [
+      "NORM-019"
+    ],
+    "--asset": [
+      "ALLOC-002"
+    ],
+    "--asset-file": [
+      "DATA-009"
+    ],
+    "--band-pp": [
+      "REB-010"
+    ],
+    "--btc-file": [
+      "DATA-005"
+    ],
+    "--btc-weight": [
+      "OPT-002"
+    ],
+    "--config": [
+      "META-005"
+    ],
+    "--confirm-off-weeks": [
+      "SIG-017"
+    ],
+    "--confirm-on-weeks": [
+      "SIG-017"
+    ],
+    "--confirm-weeks": [
+      "SIG-011"
+    ],
+    "--confirmation-grid": [
+      "WF-010"
+    ],
+    "--cost-basis": [
+      "IND-008"
+    ],
+    "--cpi-file": [
+      "DATA-004",
+      "REAL-005"
+    ],
+    "--cpi-missing-policy": [
+      "NORM-015"
+    ],
+    "--currency": [
+      "RUN-004"
+    ],
+    "--data-file": [
+      "DATA-008"
+    ],
+    "--delay": [
+      "DELAY-002",
+      "DELAY-003"
+    ],
+    "--delay-grid": [
+      "WF-009"
+    ],
+    "--distribution-file": [
+      "FND-009"
+    ],
+    "--dividend-estimate-policy": [
+      "DIV-011"
+    ],
+    "--dividend-file": [
+      "DATA-007"
+    ],
+    "--dividend-tax-mode": [
+      "DIV-001",
+      "DIV-009"
+    ],
+    "--end": [
+      "RUN-002"
+    ],
+    "--external-solidarity-base": [
+      "IND-004"
+    ],
+    "--foundation-annual-cost": [
+      "FND-010"
+    ],
+    "--foundation-cost-proration": [
+      "FND-012"
+    ],
+    "--foundation-setup-cost": [
+      "FND-015"
+    ],
+    "--foundation-tax-event": [
+      "FND-005"
+    ],
+    "--frequency": [
+      "META-002"
+    ],
+    "--gold-file": [
+      "DATA-003"
+    ],
+    "--gold-weight": [
+      "OPT-003"
+    ],
+    "--initial-capital": [
+      "RUN-003"
+    ],
+    "--jobs": [
+      "ERR-006"
+    ],
+    "--ma": [
+      "SIG-001"
+    ],
+    "--ma-grid": [
+      "WF-007"
+    ],
+    "--max-drawdown-limit": [
+      "OPT-008"
+    ],
+    "--objective": [
+      "OPT-007"
+    ],
+    "--optimization-mode": [
+      "WF-001"
+    ],
+    "--optimize-params": [
+      "WF-006"
+    ],
+    "--rebalance": [
+      "REB-001",
+      "REB-007"
+    ],
+    "--rebalance-band-pp": [
+      "REB-007"
+    ],
+    "--rf-weight": [
+      "OPT-005"
+    ],
+    "--risk-off-action": [
+      "RISK-008"
+    ],
+    "--run-name": [
+      "REP-001"
+    ],
+    "--sell-fraction": [
+      "RISK-001"
+    ],
+    "--single-asset": [
+      "ALLOC-003"
+    ],
+    "--slippage-bps": [
+      "REB-004"
+    ],
+    "--sortino-mar": [
+      "MET-024"
+    ],
+    "--start": [
+      "RUN-001"
+    ],
+    "--step-years": [
+      "WF-012"
+    ],
+    "--stocks-price-file": [
+      "DATA-001"
+    ],
+    "--stocks-return-file": [
+      "DATA-002"
+    ],
+    "--stocks-weight": [
+      "OPT-004"
+    ],
+    "--tax-profile": [
+      "TAX-002"
+    ],
+    "--test-years": [
+      "WF-003"
+    ],
+    "--threshold": [
+      "SIG-004",
+      "THR-002",
+      "THR-005"
+    ],
+    "--threshold-grid": [
+      "WF-008"
+    ],
+    "--threshold-off": [
+      "SIG-007"
+    ],
+    "--threshold-on": [
+      "SIG-007"
+    ],
+    "--train-years": [
+      "WF-002"
+    ],
+    "--transaction-cost-bps": [
+      "REB-003"
+    ],
+    "--walk-forward-window": [
+      "WF-011"
+    ],
+    "--weights": [
+      "ALLOC-001"
+    ]
+  },
+  "cli_options_only_in_examples": [],
+  "config_keys_with_conflicting_defaults": [
+    "data.cpi_file",
+    "signal.delay_weeks",
+    "signal.threshold_grid"
+  ],
+  "must_depends_on_should": [
+    "CLI-005->DIV-009",
+    "CLI-006->META-005",
+    "DATA-004->REAL-005",
+    "DEF-026->IND-010",
+    "DIV-001->DIV-009",
+    "FND-005->FND-009",
+    "NORM-010->SIG-017",
+    "REPRO-006->OPT-009",
+    "SIG-018->RISK-008",
+    "TEST-034->IND-010",
+    "TEST-044->DATA-010"
+  ]
+}

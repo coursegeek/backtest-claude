@@ -1,0 +1,458 @@
+{
+  "audit_tool": "work/tools/audit_inputs.py",
+  "as_of_date": "2026-09-29",
+  "audit_assumptions": [
+    "Friday key = Monday-Sunday calendar week Friday (NORM-007).",
+    "week_start files (stocks, gold, BTC date) mapped with +4 days (NORM-008 analogue).",
+    "First return week = first Friday key >= --start (see Q-014).",
+    "Warm-up = ma + confirm + max(delay) contiguous weeks before first return week (NORM-010).",
+    "Dividend file needed only if stocks active, tax profile != none, smoothed_weekly (Q-009)."
+  ],
+  "manifest": {
+    "files": 8,
+    "mismatches": []
+  },
+  "sources": {
+    "stocks_signal": {
+      "file": "US_STOCK_PRICE_WEEKLY_REAL_1919_2026.csv",
+      "sha256": "e3b3f06f1c5b0017b79d4cb32b925d4e998d0d58973e35dd0675953ed51a56a5",
+      "bytes": 150448,
+      "line_endings": "LF",
+      "columns": [
+        "week_start",
+        "price_index_continuous"
+      ],
+      "rows": 5568,
+      "date_column": "week_start",
+      "date_encoding": "ISO YYYY-MM-DD",
+      "date_weekdays": {
+        "Mon": 5568
+      },
+      "first_week_start": "1919-12-29",
+      "last_week_start": "2026-09-14",
+      "first_friday_key": "1920-01-02",
+      "last_friday_key": "2026-09-18",
+      "step_days": {
+        "7": 5566,
+        "14": 1
+      },
+      "gaps": [
+        {
+          "after": "1933-03-03",
+          "before": "1933-03-17",
+          "days": 14,
+          "missing_week_keys": [
+            "1933-03-10"
+          ]
+        }
+      ],
+      "duplicate_dates": [],
+      "non_positive_prices": 0,
+      "min_price": "103.455924043",
+      "max_price": "180601.803918",
+      "schwert_overlap": {
+        "schwert_file": "US_STOCK_PRICE_WEEKLY_schwert_1919_1962.csv",
+        "identical_until_week_start": "1962-06-25",
+        "first_different_week_start": "1962-07-02",
+        "inferred_segments": [
+          {
+            "source": "Schwert (identical to supplemental file)",
+            "week_start_from": "1919-12-29",
+            "week_start_to": "1962-06-25"
+          },
+          {
+            "source": "non-Schwert (presumably SPX, rebased)",
+            "week_start_from": "1962-07-02",
+            "week_start_to": "2026-09-14"
+          }
+        ],
+        "segment_column_in_file": false
+      }
+    },
+    "stocks_return": {
+      "file": "F-F_Research_Data_Factors_weekly.csv",
+      "sha256": "0f3a628d7c1c9099e29b981f75ae39386196d2e8205cc6c7edfc0487942abd6f",
+      "bytes": 240788,
+      "line_endings": "CRLF",
+      "total_lines": 5233,
+      "preamble_lines_before_first_record": 5,
+      "header_line_number": 5,
+      "header_fields": [
+        "",
+        "Mkt-RF",
+        "SMB",
+        "HML",
+        "RF"
+      ],
+      "nondata_lines": [
+        {
+          "line": 1,
+          "text": "This file was created using the 202608 CRSP database."
+        },
+        {
+          "line": 2,
+          "text": "The Tbill return is the weekly rate that, over four weeks, "
+        },
+        {
+          "line": 3,
+          "text": "compounds to 1-month TBill rate. The 1-month TBill rate data until 202405 are fr"
+        },
+        {
+          "line": 4,
+          "text": ""
+        },
+        {
+          "line": 5,
+          "text": ",Mkt-RF,SMB,HML,RF"
+        },
+        {
+          "line": 5232,
+          "text": ""
+        },
+        {
+          "line": 5233,
+          "text": "Copyright 2026 Eugene F. Fama and Kenneth R. French"
+        }
+      ],
+      "rows": 5226,
+      "date_encoding": "YYYYMMDD",
+      "date_weekdays": {
+        "Mon": 1,
+        "Wed": 3,
+        "Thu": 152,
+        "Fri": 3912,
+        "Sat": 1158
+      },
+      "first_date": "1926-07-02",
+      "last_date": "2026-08-28",
+      "first_friday_key": "1926-07-02",
+      "last_friday_key": "2026-08-28",
+      "step_days_after_mapping": {
+        "7": 5224,
+        "14": 1
+      },
+      "gaps_after_mapping": [
+        {
+          "after": "1933-03-03",
+          "before": "1933-03-17",
+          "days": 14,
+          "missing_week_keys": [
+            "1933-03-10"
+          ]
+        }
+      ],
+      "duplicate_friday_keys": [],
+      "naive_on_or_after_friday_mapping_differs": 1158,
+      "non_friday_dates": [
+        {
+          "date": "1929-11-27",
+          "weekday": "Wed",
+          "friday_key": "1929-11-29"
+        },
+        {
+          "date": "1958-12-24",
+          "weekday": "Wed",
+          "friday_key": "1958-12-26"
+        },
+        {
+          "date": "1968-07-03",
+          "weekday": "Wed",
+          "friday_key": "1968-07-05"
+        },
+        {
+          "date": "2001-09-10",
+          "weekday": "Mon",
+          "friday_key": "2001-09-14"
+        }
+      ],
+      "nonnumeric_fields": 0,
+      "mkt_rf_pct_min": "-18.84",
+      "mkt_rf_pct_max": "17.12",
+      "rf_pct_min": "-0.02",
+      "rf_pct_max": "0.34",
+      "negative_rf_weeks": [
+        "1933-02-03",
+        "1933-02-10",
+        "1933-02-17",
+        "1933-02-24",
+        "1938-11-04",
+        "1938-11-11",
+        "1938-11-18",
+        "1938-11-25"
+      ],
+      "zero_rf_weeks": 923,
+      "alignment_vs_stock_index": {
+        "same_week_corr": "0.99025",
+        "same_week_n": 5225,
+        "naive_corr": "0.591259",
+        "naive_n": 5162,
+        "same_week_corr_to_1952": "0.992292",
+        "naive_corr_to_1952": "0.0999317"
+      }
+    },
+    "gold": {
+      "file": "GOLD_REAL_weekly_1970_2026.csv",
+      "sha256": "5105a0f58b24005cfb3c63e924e954309a374c48380ed6efa4702db25e15eacc",
+      "bytes": 134949,
+      "line_endings": "LF",
+      "columns": [
+        "week_start",
+        "gold_pm_usd",
+        "weekly_return",
+        "source"
+      ],
+      "rows": 2959,
+      "date_column": "week_start",
+      "date_encoding": "ISO YYYY-MM-DD",
+      "date_weekdays": {
+        "Mon": 2959
+      },
+      "first_friday_key": "1970-01-09",
+      "last_friday_key": "2026-09-18",
+      "step_days": {
+        "7": 2958
+      },
+      "gaps": [],
+      "duplicate_dates": [],
+      "source_counts": {
+        "FOREXCOM_FILL": 26,
+        "OANDA": 2671,
+        "TVC": 262
+      },
+      "source_segments_count": 40,
+      "source_segments_major": [
+        {
+          "source": "TVC",
+          "from_key": "1970-01-09",
+          "to_key": "1975-01-10",
+          "rows": 262
+        },
+        {
+          "source": "OANDA",
+          "from_key": "1975-01-17",
+          "to_key": "1997-09-05",
+          "rows": 1182
+        },
+        {
+          "source": "OANDA",
+          "from_key": "1998-10-16",
+          "to_key": "2026-09-18",
+          "rows": 1458
+        }
+      ],
+      "fill_rows": [
+        "1997-09-08",
+        "1997-09-15",
+        "1997-10-06",
+        "1997-10-20",
+        "1997-10-27",
+        "1997-11-10",
+        "1997-11-24",
+        "1997-12-01",
+        "1997-12-08",
+        "1997-12-29",
+        "1998-01-12",
+        "1998-01-26",
+        "1998-02-16",
+        "1998-03-09",
+        "1998-04-13",
+        "1998-04-27",
+        "1998-05-11",
+        "1998-05-25",
+        "1998-07-06",
+        "1998-07-13",
+        "1998-07-27",
+        "1998-08-10",
+        "1998-08-31",
+        "1998-09-07",
+        "1998-09-28",
+        "1998-10-05"
+      ],
+      "empty_weekly_return": [
+        "1970-01-05"
+      ],
+      "weekly_return_mismatch": [],
+      "zero_return_weeks": 32,
+      "non_positive_prices": 0
+    },
+    "btc": {
+      "file": "BTC_REAL_weekly_2010_2026.csv",
+      "sha256": "147ae79a6973d5b2d175c85cd6502f1e6647e7fa1629b49175842612316f2f26",
+      "bytes": 73728,
+      "line_endings": "LF",
+      "columns": [
+        "date",
+        "price",
+        "weekly_return",
+        "close_date",
+        "source_week_start",
+        "source"
+      ],
+      "rows": 845,
+      "date_encoding": "ISO YYYY-MM-DD",
+      "date_weekdays": {
+        "Mon": 845
+      },
+      "close_date_weekdays": {
+        "Sun": 845
+      },
+      "close_minus_date_days": {
+        "6": 845
+      },
+      "close_minus_friday_key_days": {
+        "2": 845
+      },
+      "date_equals_source_week_start": 845,
+      "sources": {
+        "TradingView INDEX:BTCUSD": 845
+      },
+      "first_date": "2010-07-12",
+      "last_date": "2026-09-21",
+      "first_friday_key": "2010-07-16",
+      "last_friday_key": "2026-09-25",
+      "last_close_date": "2026-09-27",
+      "step_days": {
+        "7": 843,
+        "14": 1
+      },
+      "gaps": [
+        {
+          "after": "2011-06-13",
+          "before": "2011-06-27",
+          "days": 14,
+          "missing_week_keys": [
+            "2011-06-20"
+          ]
+        }
+      ],
+      "returns_spanning_gap": [
+        "2011-06-27"
+      ],
+      "empty_weekly_return": [
+        "2010-07-12"
+      ],
+      "weekly_return_mismatch": [],
+      "duplicate_dates": [],
+      "rows_in_spec_range_after_monday_to_friday": 794,
+      "spec_range": "2011-07-08..2026-09-18 (794 rows)",
+      "completeness": {
+        "as_of": "2026-09-29",
+        "rows_with_friday_key_after_as_of": 0,
+        "rows_with_close_after_as_of": 0,
+        "example_as_of": "2026-09-22",
+        "example_rows_dropped_by_friday_rule": 1,
+        "example_rows_with_close_after": 1,
+        "example_ambiguous_rows": 0
+      }
+    },
+    "dividend": {
+      "file": "SPX_dividend_return_weekly_shiller.csv",
+      "sha256": "d659a1c2d2ba0166777381dc58524ed203dd7d0d76152eabade0b5fa3b386e37",
+      "bytes": 384113,
+      "line_endings": "LF",
+      "columns": [
+        "date",
+        "dividend_return",
+        "dividend_points",
+        "spx_close_prev",
+        "status"
+      ],
+      "missing_spec_columns": [
+        "spx_close",
+        "year",
+        "annual_yield_pct",
+        "trailing_dps_points"
+      ],
+      "rows": 5218,
+      "date_encoding": "ISO YYYY-MM-DD",
+      "date_weekdays": {
+        "Fri": 5218
+      },
+      "first_date": "1926-07-02",
+      "last_date": "2026-06-26",
+      "step_days": {
+        "7": 5217
+      },
+      "gaps": [],
+      "duplicate_dates": [],
+      "status_counts": {
+        "estimate": 5218
+      },
+      "formula_max_rel_error": "2.11e-16",
+      "months": 1200,
+      "months_with_constant_dividend_return": 1200,
+      "spx_close_prev_linked_to_stock_index": "5217/5217",
+      "rows_without_stock_index_prev_week": [
+        "1933-03-17"
+      ],
+      "rows_not_in_ff_calendar": [
+        "1933-03-10"
+      ],
+      "rows_from_1970_01_02": 2948,
+      "ff_weeks_after_last_dividend": 9
+    },
+    "cpi": {
+      "file": "CPIAUCNS.csv",
+      "sha256": "f79e3a78837142293449cee4a1a9b1da7be677fb3e989ffb2ef48e8e7cf4cdd7",
+      "bytes": 25074,
+      "line_endings": "LF",
+      "columns": [
+        "observation_date",
+        "CPIAUCNS"
+      ],
+      "rows": 1364,
+      "date_encoding": "ISO YYYY-MM-DD (first of month)",
+      "day_of_month": {
+        "1": 1364
+      },
+      "first_month": "1913-01",
+      "last_month": "2026-08",
+      "empty_values": [
+        "2025-10-01"
+      ],
+      "month_gaps": []
+    },
+    "supplemental_schwert": {
+      "file": "US_STOCK_PRICE_WEEKLY_schwert_1919_1962.csv",
+      "sha256": "4d0f91bd40ba6dccb79fd4d5cb58e813aec3c27ceefc49c0cadf770025360901",
+      "rows": 2218,
+      "first_week_start": "1919-12-29",
+      "last_week_start": "1962-07-02",
+      "default_config_key": "none (DATA_MAP)"
+    }
+  },
+  "nominal_vs_real": {
+    "from": "1926-07-02",
+    "to": "2026-06-26",
+    "index_growth": "529.15078",
+    "ff_minus_dividend_growth": "459.90263",
+    "cpi_growth": "19.082971"
+  },
+  "completeness_norm019": {
+    "stocks_signal": {
+      "last_friday_key": "2026-09-18",
+      "rows_after_as_of": 0,
+      "rows_after_norm019_example": 0
+    },
+    "stocks_return": {
+      "last_friday_key": "2026-08-28",
+      "rows_after_as_of": 0,
+      "rows_after_norm019_example": 0
+    },
+    "gold": {
+      "last_friday_key": "2026-09-18",
+      "rows_after_as_of": 0,
+      "rows_after_norm019_example": 0
+    },
+    "btc": {
+      "last_friday_key": "2026-09-25",
+      "rows_after_as_of": 0,
+      "rows_after_norm019_example": 1
+    },
+    "dividend": {
+      "last_friday_key": "2026-06-26",
+      "rows_after_as_of": 0,
+      "rows_after_norm019_example": 0
+    }
+  }
+}

@@ -1,0 +1,35 @@
+config_key,requirement_ids,priorities,distinct_defaults,conflict
+allocation.targets,ALLOC-001;DEF-029,MUST;MUST,required,no
+data.cpi_file,DATA-004;REAL-005,MUST;SHOULD,CPIAUCNS.csv || supported via --cpi-file,YES
+engine.frequency,META-002;DEF-001,MUST;MUST,weekly,no
+metrics.real_cagr,REAL-001;MET-005,MUST;MUST,true,no
+metrics.turnover,REB-005;MET-014,MUST;MUST,true,no
+portfolio.currency,META-007;RUN-004;DEF-021,MUST;MUST;MUST,PLN,no
+portfolio.rebalance,REB-001;DEF-007,MUST;MUST,signal-only,no
+portfolio.slippage_bps,REB-004;DEF-009,MUST;MUST,0,no
+portfolio.transaction_cost_bps,REB-003;DEF-008,MUST;MUST,0,no
+report.files,REP-002;REP-003;REP-004;REP-005;REP-006;REP-007;REP-008;REP-009,MUST;MUST;MUST;MUST;MUST;MUST;MUST;MUST,config_resolved.yaml || data_manifest.json || signals.csv || summary.csv || tax_events.csv || trades.csv || validation_report.csv || weekly_portfolio.csv,no
+signal.delay_weeks,DELAY-002;DELAY-003;THR-003;DEF-004,MUST;MUST;MUST;MUST,"1 || 1,2,4,8 || 1:4",YES
+signal.ma_length,SIG-001;DEF-002,MUST;MUST,50,no
+signal.threshold_grid,THR-002;THR-005,MUST;MUST,"0,1,2,3,5,7.5 || 1:5:1",YES
+signals.<asset>.threshold,SIG-004;SIG-005,MUST;MUST,per-asset; fallback 3%,no
+signals.btc.confirm_weeks,SIG-014;DEF-024,MUST;MUST,1,no
+signals.gold.confirm_weeks,SIG-013;DEF-023,MUST;MUST,4,no
+signals.stocks.confirm_weeks,SIG-012;DEF-022,MUST;MUST,2,no
+tax.dividend_tax_mode,DIV-001;DEF-020,MUST;MUST,smoothed_weekly,no
+tax.foundation.admin_cost_proration,FND-012;DEF-028,MUST;MUST,prorated,no
+tax.foundation.annual_admin_cost_pln,FND-010;DEF-027,MUST;MUST,40000,no
+tax.foundation.dividend_rate,DIV-003;FND-001;DEF-015,MUST;MUST;MUST,0.15,no
+tax.foundation.internal_trading_tax_rate,FND-002;DEF-016,MUST;MUST,0,no
+tax.foundation.setup_cost_pln,FND-015;DEF-033,MUST;MUST,40000,no
+tax.foundation.tax_event,FND-005;DEF-019,MUST;MUST,terminal,no
+tax.foundation_15.distribution_rate,FND-003;DEF-017,MUST;MUST,0.15,no
+tax.foundation_19.distribution_rate,FND-004;DEF-018,MUST;MUST,0.19,no
+tax.individual.capital_gains_rate,IND-001;DEF-012,MUST;MUST,0.19,no
+tax.individual.dividend_rate,DIV-002;DEF-011,MUST;MUST,0.19,no
+tax.individual.loss_carryforward_years,IND-010;DEF-026,SHOULD;MUST,5,no
+tax.individual.rf_interest_rate,IND-014;DEF-025,MUST;MUST,0.19,no
+tax.individual.solidarity_rate,IND-002;DEF-013,MUST;MUST,0.04,no
+tax.individual.solidarity_threshold_pln,IND-003;DEF-014,MUST;MUST,1000000,no
+tax.no_cross_index_dividend_inference,DIV-008;SEM-006,MUST;MUST,true,no
+tax.profile,TAX-002;DEF-010,MUST;MUST,none,no
