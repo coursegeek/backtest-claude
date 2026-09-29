@@ -69,3 +69,27 @@ def test_price_carry_only_when_configured():
         build_run_calendar(k(0), k(3), src, {"stocks_return"}, {"gold"}, price_policy="error")
     cal = build_run_calendar(k(0), k(3), src, {"stocks_return"}, {"gold"}, price_policy="carry")
     assert cal.carried == (("gold", k(2)),)
+
+
+def test_q050_sma_over_available_observations_across_gap():
+    """Q-050: SMA = mean of the last ma available observations (the window spans the gap, no
+    fill, no reset of SMA history); the gap is flagged; counters restart; warm-up counts
+    available observations."""
+    from src.validation import check_warmup
+    prices = [10.0, 20.0, 30.0, 0.0, 40.0, 50.0]
+    s = price_series(prices, first_key="1933-01-06", skip=(3,))      # week 3 missing
+    p = SignalParams("stocks", 3, 0.0, 0.0, 2, 2, 1, 0.5, "sell_fraction_current")
+    recs, _, _ = evaluate(s, p)
+    by = {r.week_key: r for r in recs}
+    after = by[k(4)]
+    assert after.sma == (20.0 + 30.0 + 40.0) / 3                       # spans the gap
+    assert "calendar_gap" in after.flags and "sma_spans_gap" in after.flags
+    assert by[k(5)].sma == (30.0 + 40.0 + 50.0) / 3 and "calendar_gap" not in by[k(5)].flags
+    assert by[k(2)].sma == 20.0 and "sma_spans_gap" not in by[k(2)].flags
+    # warm-up need = ma + confirm + delay = 6; six calendar weeks elapsed but only five
+    # observations exist before k(6) -> insufficient; one more observation satisfies it.
+    from src.errors import WarmupError
+    with pytest.raises(WarmupError) as exc:
+        check_warmup("stocks", s.keys(), k(6), p, "reconstruct_history")
+    assert (exc.value.available, exc.value.required) == (5, 6)
+    assert check_warmup("stocks", s.keys() + (k(6),), k(7), p, "reconstruct_history") is None

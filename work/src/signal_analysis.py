@@ -1,53 +1,95 @@
 """Signal pipeline: indicators -> confirmation -> scheduling -> effective state, historical
 reconstruction before a start week (SIG-003, SIG-016, SIG-018, SIG-019, NORM-010/012/016).
 
-Per weekly observation K of an asset (ascending):
-  1. start of week K: executions with execution_week <= K are applied (effective state);
-  2. end of week K (evaluation time, Sunday): the observation must already be available
-     (BTC close_date == Sunday); SMA, bands, condition and counters are updated; a confirmed
-     transition schedules one execution at K + delay.
-No portfolio, trade or tax exists here; reconstruction before the start only rebuilds state.
+``SignalTracker`` is the single incremental implementation used by signal-only analysis,
+pre-start reconstruction and the portfolio engine. Per observed week K of one asset:
+  1. start of week K: ``due(K)`` applies executions with execution_week <= K (in the
+     portfolio engine these become trades in pipeline step 1);
+  2. end of week K (evaluation time, Sunday): ``observe(point)`` requires the observation to
+     be available, updates SMA (last ``ma`` available observations, Q-050), bands, condition
+     and counters (reset across a calendar gap, Q-012) and schedules a confirmed transition
+     at K + delay.
 """
 from __future__ import annotations
 
 import datetime as dt
+import math
+from collections import deque
 from dataclasses import dataclass
 
 from .availability import assert_available, evaluation_time
+from .calendar import WEEK
 from .confirmation import MachineState, step
 from .models import Severity, SignalParams, SignalRecord, State, ValidationIssue
 from .scheduling import ExecutionQueue
-from .signals import bands, classify, sma
+from .signals import bands, classify
+
+
+class SignalTracker:
+    """Incremental, deterministic signal state of one asset."""
+
+    def __init__(self, params: SignalParams):
+        self.params = params
+        self.window = deque(maxlen=params.ma)       # (week_key, price) of the last ma observations
+        self.machine = MachineState()
+        self.queue = ExecutionQueue(params.asset, State.RISK_ON)
+        self.observed = 0
+        self.last_key = None
+
+    @property
+    def effective_state(self) -> State:
+        return self.queue.effective_state
+
+    def due(self, week: dt.date) -> list:
+        """Executions whose execution_week <= week, FIFO: [(ScheduledExecution, is_noop)]."""
+        return self.queue.due(week)
+
+    def observe(self, point, executed=()) -> SignalRecord:
+        p = self.params
+        if self.last_key is not None and point.week_key <= self.last_key:
+            raise ValueError(f"{p.asset}: observations must be strictly increasing")
+        assert_available(point, evaluation_time(point.week_key), f"{p.asset}: ")
+        self.window.append((point.week_key, point.price))
+        flags = []
+        s = None
+        if len(self.window) == p.ma:
+            s = math.fsum(x for _, x in self.window) / p.ma      # SIG-001, Q-050
+            keys = [k for k, _ in self.window]
+            if any(b - a != WEEK for a, b in zip(keys, keys[1:])):
+                flags.append("sma_spans_gap")
+        lower, upper = bands(s, p.threshold_off, p.threshold_on)
+        cond = classify(point.price, lower, upper)
+        self.machine, confirmed, step_flags = step(self.machine, point.week_key, cond, p)
+        scheduled = None
+        if confirmed is not None:
+            scheduled = self.queue.schedule(point.week_key, p.delay, confirmed).execution_week
+        exec_target = next((ex.target_state for ex, noop in reversed(executed) if not noop), None)
+        all_flags = (tuple(step_flags) + tuple(flags)
+                     + tuple(f"execution_noop:{ex.confirm_week}" for ex, noop in executed if noop)
+                     + tuple(point.flags))
+        self.observed += 1
+        self.last_key = point.week_key
+        ms = self.machine
+        return SignalRecord(
+            asset=p.asset, week_key=point.week_key, available_at=point.available_at,
+            price=point.price, sma=s, lower_band=lower, upper_band=upper, condition=cond,
+            exit_counter=ms.exit_counter, entry_counter=ms.entry_counter,
+            confirmed_state=ms.state, state_basis=ms.basis, confirmation=confirmed is not None,
+            scheduled_execution_week=scheduled, effective_state=self.queue.effective_state,
+            executed_target=exec_target, flags=all_flags)
 
 
 def evaluate(series, params: SignalParams, until=None) -> tuple:
-    """Run the full signal pipeline over ``series`` (optionally only weeks < ``until``).
+    """Signal-only pipeline over ``series`` (optionally only weeks < ``until``).
     Returns (records, machine_state, queue)."""
-    points = [p for p in series.points if until is None or p.week_key < until]
-    smas = sma([p.price for p in points], params.ma)
-    ms = MachineState()
-    queue = ExecutionQueue(params.asset, State.RISK_ON)
+    tracker = SignalTracker(params)
     records = []
-    for p, s in zip(points, smas):
-        executed = queue.due(p.week_key)
-        exec_target = next((ex.target_state for ex, noop in reversed(executed) if not noop), None)
-        assert_available(p, evaluation_time(p.week_key), f"{params.asset}: ")
-        lower, upper = bands(s, params.threshold_off, params.threshold_on)
-        cond = classify(p.price, lower, upper)
-        ms, confirmed, flags = step(ms, p.week_key, cond, params)
-        scheduled = None
-        if confirmed is not None:
-            scheduled = queue.schedule(p.week_key, params.delay, confirmed).execution_week
-        flags = flags + tuple(f"execution_noop:{ex.confirm_week}" for ex, noop in executed if noop)
-        flags = flags + tuple(f for f in p.flags)
-        records.append(SignalRecord(
-            asset=params.asset, week_key=p.week_key, available_at=p.available_at, price=p.price,
-            sma=s, lower_band=lower, upper_band=upper, condition=cond,
-            exit_counter=ms.exit_counter, entry_counter=ms.entry_counter,
-            confirmed_state=ms.state, state_basis=ms.basis, confirmation=confirmed is not None,
-            scheduled_execution_week=scheduled, effective_state=queue.effective_state,
-            executed_target=exec_target, flags=flags))
-    return tuple(records), ms, queue
+    for p in series.points:
+        if until is not None and p.week_key >= until:
+            break
+        executed = tracker.due(p.week_key)
+        records.append(tracker.observe(p, executed))
+    return tuple(records), tracker.machine, tracker.queue
 
 
 @dataclass(frozen=True)
@@ -66,18 +108,29 @@ class PreStartState:
     issues: tuple = ()
 
 
-def reconstruct(series, params: SignalParams, first_week: dt.date) -> PreStartState:
-    """Rebuild SMA/counters/state on the whole history before ``first_week`` (Q-012 point 3).
-    Executions scheduled before ``first_week`` define the effective state used for the
-    initial sleeve split; later ones stay pending and become in-backtest trades."""
-    records, ms, queue = evaluate(series, params, until=first_week)
-    queue.due(first_week - dt.timedelta(days=1))
+def reconstruct_tracker(series, params: SignalParams, first_week: dt.date):
+    """Rebuild the tracker on the whole history before ``first_week`` (Q-012 point 3).
+    Executions scheduled before ``first_week`` only set the effective state (no trades,
+    SIG-019); later ones stay pending and become in-backtest trades (Q-019).
+    Returns (tracker, PreStartState)."""
+    tracker = SignalTracker(params)
+    for p in series.points:
+        if p.week_key >= first_week:
+            break
+        tracker.observe(p, tracker.due(p.week_key))
+    tracker.due(first_week - dt.timedelta(days=1))
     issues = []
+    ms = tracker.machine
     if ms.basis == "fallback":
         issues.append(ValidationIssue(
             Severity.WARNING, "initial_state_fallback", params.asset,
-            f"no confirmed transition in {len(records)} weeks of history before {first_week}; "
+            f"no confirmed transition in {tracker.observed} weeks of history before {first_week}; "
             "state RISK_ON is a fallback (SIG-003)", first_week, "SIG-003"))
-    return PreStartState(params.asset, first_week, len(records), ms.state, ms.basis,
-                         ms.exit_counter, ms.entry_counter, queue.effective_state, queue.pending,
-                         records[-1].week_key if records else None, tuple(issues))
+    state = PreStartState(params.asset, first_week, tracker.observed, ms.state, ms.basis,
+                          ms.exit_counter, ms.entry_counter, tracker.effective_state,
+                          tracker.queue.pending, tracker.last_key, tuple(issues))
+    return tracker, state
+
+
+def reconstruct(series, params: SignalParams, first_week: dt.date) -> PreStartState:
+    return reconstruct_tracker(series, params, first_week)[1]

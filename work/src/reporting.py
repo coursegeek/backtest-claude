@@ -72,3 +72,64 @@ def normalized_price_rows(series) -> list:
     return [{"role": series.role, "week_key": p.week_key, "value": p.price, "value_kind": "price",
              "available_at": p.available_at, "source_date": p.source_date, "source": p.source,
              "flags": p.flags} for p in series.points]
+
+
+TRADE_FIELDS = ["week_key", "asset", "side", "reason", "gross_traded_value", "transaction_cost",
+                "slippage", "net_cash_flow", "asset_value_before", "asset_value_after",
+                "reserve_before", "reserve_after", "cash_component", "units", "cost_basis",
+                "realized_gain", "confirm_week", "pipeline_step"]
+LEDGER_COMPONENTS = ("stocks", "gold", "btc", "rf_base", "rf_reserve_stocks", "rf_reserve_gold",
+                     "rf_reserve_btc")
+SLEEVES = ("stocks", "gold", "btc", "rf")
+
+
+def trade_rows(trades) -> list:
+    return [{k: getattr(t, k) for k in TRADE_FIELDS} for t in trades]
+
+
+def normalized_return_rows(role, points) -> list:
+    return [{"role": role, "week_key": p.week_key, "value": p.value, "value_kind": "return",
+             "available_at": p.available_at, "source_date": p.source_date, "source": "",
+             "flags": p.flags} for p in points]
+
+
+def weekly_portfolio_fields(assets) -> list:
+    """REP-003/REP-013: NAV, component values, weights actually used for the week's return
+    (after start-of-week trades), end-of-week actual weights, strategic targets, returns,
+    trades, costs, amounts due and the effective signal state of every active asset."""
+    return (["week_key", "nav_start", "nav_after_trades", "nav_end", "portfolio_return"]
+            + [f"value_{c}" for c in LEDGER_COMPONENTS]
+            + [f"weight_start_{s}" for s in SLEEVES] + [f"weight_end_{s}" for s in SLEEVES]
+            + [f"target_{s}" for s in SLEEVES]
+            + [f"return_{a}" for a in ("stocks", "gold", "btc")] + ["return_rf"]
+            + ["trades", "traded_value", "transaction_costs", "slippage", "amounts_due",
+               "taxes_paid"] + [f"state_{a}" for a in assets])
+
+
+def weekly_portfolio_rows(result, targets, assets) -> list:
+    rows = []
+    for w in result.weeks:
+        r = {"week_key": w.week_key, "nav_start": w.nav_start,
+             "nav_after_trades": w.ledger_after_trades.nav, "nav_end": w.nav_end,
+             "portfolio_return": w.portfolio_return}
+        for c, v in w.ledger_end.components().items():
+            r[f"value_{c}"] = v
+        for s, v in w.ledger_after_trades.sleeve_weights().items():
+            r[f"weight_start_{s}"] = v
+        for s, v in w.ledger_end.sleeve_weights().items():
+            r[f"weight_end_{s}"] = v
+        for s in SLEEVES:
+            r[f"target_{s}"] = targets[s]
+        for a in ("stocks", "gold", "btc"):
+            r[f"return_{a}"] = w.market.asset_returns.get(a)
+        r["return_rf"] = w.market.rf_return
+        r["trades"] = len(w.trades)
+        r["traded_value"] = sum(t.gross_traded_value for t in w.trades)
+        r["transaction_costs"] = sum(t.transaction_cost for t in w.trades)
+        r["slippage"] = sum(t.slippage for t in w.trades)
+        r["amounts_due"] = w.amounts_due.total
+        r["taxes_paid"] = 0.0
+        for a in assets:
+            r[f"state_{a}"] = w.effective_states[a]
+        rows.append(r)
+    return rows

@@ -127,7 +127,8 @@ requirement ID; mapa wymaganie → test jest w `work/compliance_matrix.csv` (kol
 | test_reproducibility.py | identyczny config + SHA256 → identyczne pliki (poza timestampem) |
 | test_terminal_separation.py | settlement nie zmienia żadnego punktu ścieżki tygodniowej |
 | test_pre_after_tax.py | dla tax.profile=none ścieżki pre-tax i after-tax są identyczne (Q-015) |
-| test_gap_policy_convergence.py | dla startów ≥1935 stan sygnału akcji identyczny przy obcięciu historii przed luką 1933 i przy `carry` (Q-012) |
+| test_engine_properties.py | silnik: tożsamość NAV po każdym kroku, transakcja 0 bps nie zmienia NAV, sygnał jednego aktywa nie zmienia innych sleeve'ów, przyszłość nie zmienia przeszłości, kolejność kluczy aktywów bez wpływu, zakup z rezerwy nigdy nie tworzy ujemnej gotówki, konserwacja asset↔reserve przy 0 bps |
+| test_gap_history_convergence.py | dla startów ≥1936 stan sygnału akcji z całej historii jest identyczny jak z historii po luce 1933 (luka nie zniekształca późniejszych sygnałów; Q-012) |
 
 Generatory danych losowych mają stałe ziarno (`random.Random(seed)`), bez zewnętrznych bibliotek.
 

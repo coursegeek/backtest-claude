@@ -52,9 +52,9 @@ def test_cli_007_bare_command_fails_with_alloc_001():
 
 
 def test_portfolio_commands_validate_then_stop():
-    """CLI-001 resolves/validates; the portfolio engine is not part of this build (exit 3)."""
-    r = cli("run", "--weights", "stocks=0.4,gold=0.4,rf=0.2", "--start", "1971-01-01",
-            "--end", "2026-07-31")
+    """Commands outside this build resolve/validate their config and stop with exit 3."""
+    r = cli("tax-compare", "--weights", "stocks=0.4,gold=0.4,rf=0.2",
+            "--tax-profile", "none,individual_pl")
     assert r.returncode == 3 and "not implemented" in r.stderr
     r = cli("delay-scan", "--delay", "1:4")
     assert r.returncode == 2 and "ALLOC-002" in r.stderr

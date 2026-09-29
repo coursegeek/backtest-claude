@@ -315,3 +315,42 @@ class RunCalendar:
     dropped: tuple              # weeks removed by missing.return_policy=drop
     carried: tuple              # (role, week_key) price carried by missing.price_policy=carry
     issues: tuple = ()
+
+
+class TradeReason(str, Enum):
+    """Reason codes of every trade (REP-004). Only the signal reasons are produced by the
+    current build; the others are reserved for rebalancing, sell_to_pay, walk-forward and
+    terminal settlement."""
+    SIGNAL_EXIT = "signal_exit"
+    SIGNAL_REENTRY = "signal_reentry"
+    CALENDAR_REBALANCE = "calendar_rebalance"
+    BAND_REBALANCE = "band_rebalance"
+    SELL_TO_PAY = "sell_to_pay"
+    WALK_FORWARD_REBALANCE = "walk_forward_rebalance"
+    TERMINAL_LIQUIDATION = "terminal_liquidation"
+
+
+@dataclass(frozen=True)
+class Trade:
+    """One buy or sell of a risky asset against a cash-like RF component (Q-017).
+
+    net_cash_flow is signed from the cash component's point of view: + sale proceeds after
+    costs credited, - cash spent on a purchase including costs."""
+    week_key: dt.date
+    asset: str
+    side: str                       # "sell" | "buy"
+    reason: TradeReason
+    gross_traded_value: float
+    transaction_cost: float
+    slippage: float
+    net_cash_flow: float
+    asset_value_before: float
+    asset_value_after: float
+    reserve_before: float
+    reserve_after: float
+    cash_component: str             # e.g. rf_reserve_stocks
+    units: float
+    cost_basis: float               # basis of units sold / cost of units bought
+    realized_gain: Optional[float]  # sells only: net proceeds - cost basis (no tax here)
+    confirm_week: Optional[dt.date] = None
+    pipeline_step: int = 1

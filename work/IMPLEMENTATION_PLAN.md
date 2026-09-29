@@ -255,7 +255,7 @@ na PASS wymagań o danych kanonicznych): Q-002 złoto LBMA, Q-004 provenance spl
 schemat dywidend. Pozostałe pytania MAJOR/MINOR są implementowane wg `proposed_interpretation`
 za przełącznikami configu i opisane w `IMPLEMENTATION_NOTES.md`.
 
-## 15. Kolejność implementacji
+## 15. Kolejność implementacji (postęp: kroki 1–4 zrobione w sesjach 2–3, bez podatków w kroku 4)
 
 1. Szkielet: `backtest.py`, `src/__init__.py`, `models`, `config` (DEF-*, precedencja, jednostki), `cli` (parsowanie), pytest.
 2. `calendar`, `data_loader`, `validation`, `availability` + testy parserów/kalendarza (TEST-007/008/025..028/038/039/044/051) i `weekly_normalized.csv`.

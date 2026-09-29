@@ -65,3 +65,40 @@ def ff_text(rows, preamble=True, footer=True, crlf=True):
     if footer:
         lines += ["", "Copyright 2026 Eugene F. Fama and Kenneth R. French"]
     return ("\r\n" if crlf else "\n").join(lines) + ("\r\n" if crlf else "\n")
+
+
+def params_for(asset, **kw):
+    from src.models import SignalParams
+    base = dict(asset=asset, ma=3, threshold_off=0.0, threshold_on=0.0, confirm_off=1,
+                confirm_on=1, delay=1, sell_fraction=0.5, risk_off_action="sell_fraction_current")
+    base.update(kw)
+    return SignalParams(**base)
+
+
+def engine_inputs(histories, first, targets, returns=None, rf=0.0, params=None, costs=None,
+                  first_key="2000-01-07", trace=True, capital=1_000_000.0):
+    """Synthetic EngineInputs.
+
+    histories: asset -> full weekly signal price list starting at ``first_key``;
+    first: index of the first run week; returns: asset -> list of run-week returns (default:
+    price ratios of the history); rf: scalar or run-week list."""
+    from src.costs import CostModel
+    from src.engine import EngineInputs, WeekMarket
+    series = {a: price_series(p, first_key=first_key, role=a) for a, p in histories.items()}
+    keys = next(iter(series.values())).keys()
+    weeks = keys[first:]
+    market = {}
+    for i, w in enumerate(weeks):
+        rets = {}
+        for a, p in histories.items():
+            if returns and a in returns:
+                rets[a] = returns[a][i]
+            else:
+                rets[a] = p[first + i] / p[first + i - 1] - 1.0
+        market[w] = WeekMarket(w, rets, rf[i] if isinstance(rf, (list, tuple)) else rf)
+    full_targets = {"stocks": 0.0, "gold": 0.0, "btc": 0.0, "rf": 0.0}
+    full_targets.update(targets)
+    prm = {a: (params or {}).get(a, params_for(a)) for a in histories}
+    return EngineInputs(weeks=tuple(weeks), market=market, signal_series=series, params=prm,
+                        targets=full_targets, initial_capital=capital,
+                        costs=costs or CostModel(), trace=trace)

@@ -25,10 +25,9 @@ def step(ms: MachineState, key: dt.date, cond: Condition, params: SignalParams):
     flags = []
     exit_c, entry_c = ms.exit_counter, ms.entry_counter
     if ms.prev_key is not None and not consecutive(ms.prev_key, key):
+        flags.append("calendar_gap")                      # Q-012/Q-050: always flagged
         if exit_c or entry_c:
             flags.append("counter_reset_gap")
-        else:
-            flags.append("gap_before_week")
         exit_c = entry_c = 0
     state, basis, confirmed = ms.state, ms.basis, None
     if state == State.RISK_ON:

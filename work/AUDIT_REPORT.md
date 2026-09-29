@@ -35,7 +35,7 @@ Core engine nie został napisany; powstały wyłącznie narzędzia audytowe, rap
 | MINOR | 23 (+ Q-050) |
 | MUST zmapowane bez blokera (`MAPPED`) | 340 w audycie → 347 po adjudykacji |
 | MUST zablokowane decyzją (`BLOCKED`) | 12 w audycie → 5 po adjudykacji (tylko DATA BLOCKER) |
-| MUST `PASS` | 0 w audycie; 139 po sesji 2 (sekcja 13) |
+| MUST `PASS` | 0 w audycie; 139 po sesji 2; 165 po sesji 3 (sekcja 13) |
 | SHOULD proponowane do odroczenia | 1 (ERR-007 cache) |
 | Kontrole danych | 58: 27 PASS, 12 FAIL, 14 WARN, 5 INFO |
 | Scenariusze AB + przykłady CLI | 20: 10 wykonalnych, 10 wymaga decyzji |
@@ -210,14 +210,23 @@ jawne ostrzeżenia lub czytelne błędy zamiast cichych założeń.
 | Q-008 dywidendy | DATA_BLOCKER | Loader kanoniczny wymaga pełnego SCHEMA-005; staged plik tylko przez adapter proxy. SCHEMA-005, SEM-007 i TEST-038 pozostają BLOCKED. |
 | Q-012 luki kalendarza | RESOLVED | Cała historia do rekonstrukcji; luka tygodnia przerywa liczniki confirmation; brak auto forward-fill; polityki `error/drop/carry` tylko dla brakującego źródła w tygodniu kalendarza runu; wspólne luki raportowane. |
 | Q-020 walk-forward | RESOLVED | `train_years=15` bez skracania; brak pełnego okna → „insufficient history for requested walk-forward training window”. |
+| Q-017 koszty i RF (sesja 3) | RESOLVED | RF = ledger gotówkowy; koszty/slippage tylko na kupnie/sprzedaży stocks/gold/btc; sprzedaż `net = traded*(1-tc-slip)`, zakup z gotówki `traded = C/(1+tc+slip)`; początkowa alokacja nie jest transakcją. |
+| Q-019 stan początkowy (sesja 3) | RESOLVED | Stan potwierdzony ≠ efektywny; split z efektywnego; wykonania ≥ start pozostają pending i są transakcjami w backteście. |
+| Q-049 tożsamość NAV (sesja 3) | RESOLVED | `abs(NAV - sum(components)) / max(1, abs(NAV)) <= 1e-10`; NAV z komponentów przez `math.fsum`. |
+| Q-050 SMA przez lukę (sesja 3) | RESOLVED | SMA z ostatnich `ma` dostępnych obserwacji; luka flagowana, przerywa liczniki, nie zeruje historii SMA; warm-up liczy obserwacje. |
 
 Wiersze MUST nadal `BLOCKED` (dane niekanoniczne): SEM-001, SEM-003, SCHEMA-005, SEM-007, TEST-038.
 
-## 13. Stan implementacji (sesja 2)
+## 13. Stan implementacji
 
-Zaimplementowano warstwę foundation/core (szczegóły: `IMPLEMENTATION_NOTES.md`). Stan macierzy:
-MUST — 139 `PASS`, 26 `IN_PROGRESS`, 182 `MAPPED`, 5 `BLOCKED` (DATA BLOCKER), 0 `FAIL`;
-SHOULD — 8 `PASS`. Testy: `python -m pytest work` (wszystkie przechodzą). Żaden wiersz
+* Sesja 2: warstwa foundation/core (config, CLI, modele, kalendarz, dostępność, loadery,
+  walidacja, sygnały, alokacja, komenda `signals`).
+* Sesja 3: centralny silnik portfela bez podatków i bez rebalancingu strategicznego
+  (`ledger`, `costs`, `rf`, `cost_basis`, `engine`), pipeline PORT-011 z rzeczywistymi punktami
+  rozszerzeń dla kroków 0/2/3/5/6, komenda `run` dla `tax.profile=none` i `signal-only`.
+
+Stan macierzy: MUST — 165 `PASS`, 29 `IN_PROGRESS`, 153 `MAPPED`, 5 `BLOCKED` (DATA BLOCKER),
+0 `FAIL`; SHOULD — 10 `PASS`. Testy: `python -m pytest work` (wszystkie przechodzą). Żaden wiersz
 zablokowany przez Q-002/Q-004/Q-008 nie został oznaczony `PASS` na podstawie staged plików;
 dowody dla LBMA, segmentów SEM-001 i kanonicznego SCHEMA-005 pochodzą z syntetycznych fixture'ów.
 
@@ -229,9 +238,9 @@ questions_total=50
 blockers=6
 major=20
 minor=24
-must_mapped=182
+must_mapped=153
 must_blocked=5
-must_pass=139
+must_pass=165
 should_proposed_deferral=1
 input_checks=58
 checks_fail=12
@@ -243,9 +252,9 @@ scenarios_feasible=10
 scenarios_needs_decision=10
 blocker_ids=Q-002,Q-004,Q-005,Q-008,Q-012,Q-020
 data_blocker_ids=Q-002,Q-004,Q-008
-resolved_ids=Q-005,Q-006,Q-012,Q-020
-open_questions=43
+resolved_ids=Q-005,Q-006,Q-012,Q-017,Q-019,Q-020,Q-049,Q-050
+open_questions=39
 must_fail=0
-must_in_progress=26
-should_pass=8
+must_in_progress=29
+should_pass=10
 -->

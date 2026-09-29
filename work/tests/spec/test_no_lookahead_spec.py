@@ -80,3 +80,27 @@ def test_incomplete_current_week_drop(tmp_path, as_of, kept):
                    for i in res.report.issues)
         # the SMA of the last kept week is computed without the partial week
         assert weeks[-1] == dt.date(2026, 9, 18)
+
+
+def test_signal_T_not_affect_return_T():
+    """TEST-002 / META-003, PORT-012: an exit confirmed at the end of week T leaves the
+    exposure of week T unchanged; with delay=1 it acts only before the return of T+1."""
+    from fixtures.builders import engine_inputs, params_for
+    from src.engine import run_engine
+    hist = [100.0] * 6 + [90.0, 99.0, 98.0, 97.0]         # below SMA from index 6
+    rets = [0.0, -0.10, 0.05, -0.02, 0.03]                 # run weeks = indexes 5..9
+    base = dict(histories={"stocks": hist}, first=5, targets={"stocks": 0.8, "rf": 0.2},
+                returns={"stocks": rets}, rf=0.001)
+    sig = run_engine(engine_inputs(**base))
+    quiet = run_engine(engine_inputs(**base, params={"stocks": params_for("stocks", confirm_off=99)}))
+    conf = [r for r in sig.signal_records if r.confirmation]
+    T = conf[0].week_key
+    assert T == sig.weeks[1].week_key                     # confirmed at the end of week index 6
+    for a, b in zip(sig.weeks[:2], quiet.weeks[:2]):      # up to and including week T
+        assert a.nav_end == b.nav_end and a.trades == ()
+    w1 = sig.weeks[1]
+    assert w1.ledger_after_trades.stocks == w1.ledger_start.stocks      # return T on pre-signal exposure
+    w2 = sig.weeks[2]
+    assert [t.reason.value for t in w2.trades] == ["signal_exit"] and w2.week_key == T + WEEK
+    assert w2.ledger_after_trades.stocks == w2.ledger_start.stocks * 0.5
+    assert sig.weeks[2].nav_end != quiet.weeks[2].nav_end
