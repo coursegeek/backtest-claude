@@ -10,12 +10,14 @@ One engine serves every command. Its weekly transition follows PORT-011:
          step 3  rebalance-or-fund hook (strategic rebalance / sell_to_pay, payments)
                                                                      -> ledger_before_returns
          step 4  apply weekly returns to ledger_before_returns (PORT-005/012)
-         step 5  immediate-tax hook                      (dividend / RF taxes later)
+         step 5  immediate-tax hook (dividend tax + net dividend reinvestment, RF income tax);
+                 any dividend not settled by the hook is reinvested gross (rate 0)
          step 6  evaluate end-of-week signals, schedule future executions; end-of-week hook
                                                                      -> ledger_end
 
 Hooks receive a ``WeekContext`` and the ``WorkingPortfolio`` and may change the portfolio only
-through its primitives (sell, buy, buy_with_cash, pay, transfer), so taxes, rebalancing and
+through its primitives (sell, buy, buy_with_cash, pay, transfer, settle_dividend, withhold),
+so taxes, rebalancing and
 sell_to_pay extend this loop instead of duplicating it. Ledger invariants are checked after
 every step.
 
@@ -39,8 +41,8 @@ from .cost_basis import CostBasisBook
 from .costs import CostModel
 from .errors import NotImplementedCommand
 from .ledger import COMPONENTS, Ledger
-from .models import (RISKY_ASSETS, Payment, RfTransfer, State, Trade, TradeReason,
-                     canonical_assets)
+from .models import (RISKY_ASSETS, DividendReinvestment, Payment, RfTransfer, State, Trade,
+                     TradeReason, canonical_assets)
 from .rf import RF_BASE, grow, reserve_name
 from .signal_analysis import reconstruct_tracker
 
@@ -54,20 +56,17 @@ class WeekMarket:
     week_key: dt.date
     asset_returns: dict              # active risky asset -> total weekly return
     rf_return: float
-    dividend_yield: dict = field(default_factory=dict)   # reserved for Q-016
+    dividend_yield: dict = field(default_factory=dict)   # asset -> supplied dividend_return
+    dividend_status: dict = field(default_factory=dict)  # asset -> actual | estimate (DIV-011)
 
     def unit_price_return(self, asset: str) -> float:
-        """Return that moves the cost-basis unit price of ``asset``.
+        """Return that moves the cost-basis unit price of ``asset`` (Q-016, RESOLVED).
 
-        TODO(Q-016): with dividend taxation the unit price must move by the price component
-        only (total - gross dividend yield), while the net dividend after tax opens new lots.
-        Until that is implemented no dividend yield may be supplied, so the total return is
-        the unit-price return (valid for tax.profile=none). New code must call this method
-        instead of reading asset_returns directly for cost-basis purposes."""
-        if self.dividend_yield:
-            raise NotImplementedCommand("dividend decomposition of the unit price (Q-016) is "
-                                        "not implemented")
-        return self.asset_returns[asset]
+        With a supplied dividend return d the existing units move by the price component
+        R_total - d only; the gross dividend V_start*d is settled in step 5 (tax withheld, net
+        reinvested as a new ``dividend_reinvest`` lot). Without dividend data the total return
+        moves the unit price (dividends implicitly reinvested, e.g. dividend_tax_mode=off)."""
+        return self.asset_returns[asset] - self.dividend_yield.get(asset, 0.0)
 
 
 @dataclass(frozen=True)
@@ -129,6 +128,8 @@ class WeekRecord:
     effective_states: dict
     confirmed_states: dict
     step_ledgers: tuple = ()         # ((step, Ledger), ...) when inputs.trace
+    dividends: tuple = ()            # DividendReinvestment records of step 5
+    ledger_after_returns: Optional[Ledger] = None     # after step 4, before immediate taxes
 
     @property
     def nav_start(self) -> float:
@@ -141,6 +142,10 @@ class WeekRecord:
     @property
     def nav_before_returns(self) -> float:
         return self.ledger_before_returns.nav
+
+    @property
+    def nav_after_returns(self) -> float:
+        return self.ledger_after_returns.nav if self.ledger_after_returns is not None else float("nan")
 
     @property
     def nav_end(self) -> float:
@@ -158,6 +163,7 @@ class EngineResult:
     signal_records: tuple
     skipped_signal_observations: tuple   # (asset, week_key) in weeks off the time axis
     realizations: tuple
+    dividend_reinvestments: tuple
     pre_start: dict
     final_ledger: Ledger
     final_lots: dict
@@ -179,6 +185,7 @@ class WorkingPortfolio:
         self.transfers: list = []
         self.rebalance_events: list = []
         self.realizations: list = []
+        self.dividends: list = []
         for a in RISKY_ASSETS:
             v = ledger.asset(a)
             if v > 0:
@@ -280,6 +287,50 @@ class WorkingPortfolio:
         self.transfers.append(t)
         return t
 
+    # ---------------------------------------------------------------- step 5 settlement
+    def settle_dividend(self, week, asset, value_before_returns, dividend_return, tax,
+                        step=5) -> DividendReinvestment:
+        """DIV-005..007, Q-016: gross dividend = value_before_returns * dividend_return is
+        already inside the step-4 total return; ``tax`` is withheld from the asset and the net
+        dividend opens a ``dividend_reinvest`` lot at the current (price-component) unit price.
+        Total-return accounting, not a trade: no cost, no slippage, no turnover."""
+        gross = value_before_returns * dividend_return
+        if gross < 0 or tax < 0 or tax > gross * (1 + TOL) + TOL:
+            raise ValueError(f"{week} {asset}: invalid dividend settlement gross={gross!r} tax={tax!r}")
+        tax = min(tax, gross)
+        held = self.ledger.asset(asset)
+        if tax > held * (1 + TOL) + TOL:
+            raise ValueError(f"{week} {asset}: dividend tax {tax!r} exceeds holding {held!r}")
+        after = max(0.0, held - tax)
+        net = gross - tax
+        price = self.unit_price[asset]
+        lot = self.book.open_lot(asset, week, net / price, net, "dividend_reinvest")
+        self.ledger = self.ledger.replace(**{asset: after})
+        rec = DividendReinvestment(week, asset, value_before_returns, dividend_return, gross, tax,
+                                   net, net / price, price, lot.lot_id, step)
+        self.dividends.append(rec)
+        return rec
+
+    def withhold(self, week, component, amount, step=5) -> float:
+        """Immediate tax withheld directly from a ledger component (e.g. RF income tax). The
+        caller records the TaxEvent; this is not a Payment and not a trade."""
+        if amount <= 0:
+            return 0.0
+        available = self._component(component)
+        if amount > available * (1 + TOL) + TOL:
+            raise ValueError(f"{week}: cannot withhold {amount!r} from {component} holding {available!r}")
+        amount = min(amount, available)
+        self.ledger = self.ledger.replace(**{component: 0.0 if amount == available else available - amount})
+        return amount
+
+    def check_holdings(self, context: str = "") -> None:
+        """Holdings audit: units x unit price == ledger value of every risky asset."""
+        for a in RISKY_ASSETS:
+            v = self.ledger.asset(a)
+            u = self.book.units(a) * self.unit_price[a]
+            if abs(u - v) > 1e-9 * max(1.0, abs(v)):
+                raise AssertionError(f"{context}{a}: units x unit price {u!r} != value {v!r}")
+
     # ---------------------------------------------------------------- returns
     def apply_returns(self, market: WeekMarket) -> None:
         """Step 4: returns applied to the actual values after all start-of-week transactions;
@@ -305,7 +356,8 @@ class WorkingPortfolio:
 class PipelineHooks:
     """Extension points of the weekly pipeline (steps 0, 2, 3, 5, 6). The base class is the
     neutral policy: no amounts due, no strategic rebalance, no immediate taxes. Strategic
-    rebalancing and sell_to_pay live in rebalancing.StrategicHooks; taxes will extend it."""
+    rebalancing and sell_to_pay live in rebalancing.StrategicHooks, taxes in tax.py; they
+    are combined with ``ComposedHooks``."""
 
     def investable_capital(self, capital: float) -> float:              # step 0
         return capital
@@ -325,6 +377,40 @@ class PipelineHooks:
         return None
 
 
+class ComposedHooks(PipelineHooks):
+    """One funding policy (step 3: strategic rebalance / sell_to_pay) plus extensions (e.g. the
+    tax module) providing capital (step 0), amounts due (step 2, items concatenated),
+    immediate taxes (step 5) and end-of-week bookkeeping (step 6, before the funding policy's
+    band detection so that it sees the final end-of-week ledger)."""
+
+    def __init__(self, funding: PipelineHooks, *extensions: PipelineHooks):
+        self.funding = funding
+        self.extensions = extensions
+
+    def investable_capital(self, capital: float) -> float:
+        for e in self.extensions:
+            capital = e.investable_capital(capital)
+        return capital
+
+    def amounts_due(self, ctx, portfolio) -> AmountsDue:
+        items = []
+        for e in self.extensions:
+            items += list(e.amounts_due(ctx, portfolio).normalized_items())
+        return AmountsDue(math.fsum(a for _, a in items), tuple(items)) if items else AmountsDue()
+
+    def rebalance_or_fund(self, ctx, portfolio, due: AmountsDue) -> None:
+        self.funding.rebalance_or_fund(ctx, portfolio, due)
+
+    def immediate_taxes(self, ctx, portfolio, ledger_before_returns, market) -> None:
+        for e in self.extensions:
+            e.immediate_taxes(ctx, portfolio, ledger_before_returns, market)
+
+    def end_of_week(self, ctx, portfolio) -> None:
+        for e in self.extensions:
+            e.end_of_week(ctx, portfolio)
+        self.funding.end_of_week(ctx, portfolio)
+
+
 # ============================================================================ engine
 class Engine:
     def __init__(self, inputs: EngineInputs, hooks: Optional[PipelineHooks] = None):
@@ -337,7 +423,7 @@ class Engine:
         self.run_start = inputs.run_start or self.first_week
         if self.run_start > self.first_week:
             raise ValueError("run_start after the first retained week")
-        self.inception = self.first_week - WEEK
+        self.inception = self.run_start - WEEK          # Q-014: allocation one week before
 
     def _reconstruct(self):
         trackers, pre, issues = {}, {}, []
@@ -364,7 +450,8 @@ class Engine:
         prev_week = None
         for idx, week in enumerate(inp.weeks):
             start = pf.ledger
-            marks = (len(pf.trades), len(pf.payments), len(pf.transfers), len(pf.rebalance_events))
+            marks = (len(pf.trades), len(pf.payments), len(pf.transfers), len(pf.rebalance_events),
+                     len(pf.dividends))
             trace = []
 
             def snap(step):
@@ -400,8 +487,15 @@ class Engine:
             market = inp.market[week]
             pf.apply_returns(market)
             snap(4)
-            # 5. immediate taxes
+            after_returns = pf.ledger
+            # 5. immediate taxes; dividends the hook did not settle are reinvested gross
             self.hooks.immediate_taxes(ctx, pf, before_returns, market)
+            settled = {d.asset for d in pf.dividends[marks[4]:]}
+            for a in self.assets:
+                d = market.dividend_yield.get(a, 0.0)
+                if d and a not in settled and before_returns.asset(a) > 0:
+                    pf.settle_dividend(week, a, before_returns.asset(a), d, 0.0)
+            pf.check_holdings(f"{week} step 5: ")
             snap(5)
             # 6. end-of-week signals: only the observation of this retained week
             for a in self.assets:
@@ -423,11 +517,13 @@ class Engine:
                 market, tuple(pf.trades[marks[0]:]), tuple(pf.payments[marks[1]:]),
                 tuple(pf.transfers[marks[2]:]), rebal[-1] if rebal else None, due,
                 {a: trackers[a].effective_state for a in self.assets},
-                {a: trackers[a].machine.state for a in self.assets}, tuple(trace)))
+                {a: trackers[a].machine.state for a in self.assets}, tuple(trace),
+                tuple(pf.dividends[marks[4]:]), after_returns))
             prev_week = week
         return EngineResult(initial, tuple(weeks), tuple(pf.trades), tuple(pf.payments),
                             tuple(pf.transfers), tuple(pf.rebalance_events),
-                            tuple(signal_records), tuple(skipped), tuple(pf.realizations), pre,
+                            tuple(signal_records), tuple(skipped), tuple(pf.realizations),
+                            tuple(pf.dividends), pre,
                             pf.ledger, pf.lots_snapshot(), tuple(issues))
 
     def _execute_signal(self, pf: WorkingPortfolio, week, asset, ex) -> None:

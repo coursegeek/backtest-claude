@@ -101,6 +101,52 @@ def normalized_return_rows(role, points) -> list:
              "flags": p.flags} for p in points]
 
 
+# TAX-004 names (date, tax_base, tax_due) are kept next to the Q-035 names; date == week_key,
+# tax_base == taxable_base and tax_due == amount.
+TAX_EVENT_FIELDS = ["week_key", "date", "event_type", "category", "settlement", "tax_year", "asset",
+                    "component", "gross_base", "taxable_base", "tax_base", "rate", "amount",
+                    "tax_due", "pipeline_step", "source_status", "notes"]
+REALIZATION_FIELDS = ["week_key", "tax_year", "asset", "units_sold", "proceeds_net", "cost_basis",
+                      "realized_gain", "lots_consumed"]
+DIVIDEND_FIELDS = ["week_key", "asset", "value_before_returns", "dividend_return", "gross_dividend",
+                   "dividend_tax", "net_reinvested", "units", "unit_price", "lot_id", "pipeline_step"]
+
+
+def tax_event_rows(events) -> list:
+    rows = []
+    for e in events:
+        r = {k: getattr(e, k) for k in TAX_EVENT_FIELDS if hasattr(e, k)}
+        r.update(date=e.week_key, tax_base=e.taxable_base, tax_due=e.amount)
+        rows.append(r)
+    return rows
+
+
+def realization_rows(realizations) -> list:
+    return [{"week_key": r.week_key, "tax_year": r.week_key.year, "asset": r.asset,
+             "units_sold": r.units_sold, "proceeds_net": r.proceeds_net, "cost_basis": r.cost_basis,
+             "realized_gain": r.realized_gain,
+             "lots_consumed": "|".join(f"{i}:{u!r}:{c!r}" for i, u, c in r.consumed)}
+            for r in realizations]
+
+
+def dividend_rows(records) -> list:
+    return [{k: getattr(r, k) for k in DIVIDEND_FIELDS} for r in records]
+
+
+def weekly_tax_amounts(week_record, tax_events) -> dict:
+    """Taxes that actually left the ledger in the week: annual taxes as step-3 Payments,
+    immediate (weekly) taxes as withholdings described by their TaxEvents - each outflow once."""
+    from .tax import event_category
+    annual = math.fsum(p.amount for p in week_record.payments
+                       if event_category(p.event_type) == "tax")
+    div = math.fsum(e.amount for e in tax_events
+                    if e.week_key == week_record.week_key and e.event_type == "dividend_tax")
+    rf = math.fsum(e.amount for e in tax_events
+                   if e.week_key == week_record.week_key and e.event_type == "rf_interest_tax")
+    return {"annual_tax_paid": annual, "dividend_tax": div, "rf_interest_tax": rf,
+            "taxes_paid": math.fsum([annual, div, rf])}
+
+
 def record_rows(records, fields) -> list:
     return [{k: getattr(r, k) for k in fields} for r in records]
 
@@ -121,22 +167,27 @@ def weekly_portfolio_fields(assets) -> list:
     the week's return (after ALL start-of-week transactions and payments = ledger_before_returns,
     PORT-012), end-of-week actual weights, strategic targets, returns, trades, costs, payments
     and the effective signal state of every active asset."""
-    return (["week_key", "nav_start", "nav_after_signal", "nav_before_returns", "nav_end",
-             "portfolio_return"]
+    return (["week_key", "nav_start", "nav_after_signal", "nav_before_returns",
+             "nav_after_returns", "nav_end", "portfolio_return"]
             + [f"value_{c}" for c in LEDGER_COMPONENTS]
             + [f"weight_start_{s}" for s in SLEEVES] + [f"weight_end_{s}" for s in SLEEVES]
             + [f"target_{s}" for s in SLEEVES]
             + [f"return_{a}" for a in ("stocks", "gold", "btc")] + ["return_rf"]
+            + ["dividend_return", "gross_dividend", "dividend_reinvested"]
             + ["trades", "traded_value", "transaction_costs", "slippage", "amounts_due",
-               "payments", "rebalance", "taxes_paid"] + [f"state_{a}" for a in assets])
+               "payments", "rebalance", "annual_tax_paid", "dividend_tax", "rf_interest_tax",
+               "taxes_paid"] + [f"state_{a}" for a in assets])
 
 
-def weekly_portfolio_rows(result, targets, assets) -> list:
+def weekly_portfolio_rows(result, targets, assets, tax_events=()) -> list:
+    by_week = {}
+    for e in tax_events:
+        by_week.setdefault(e.week_key, []).append(e)
     rows = []
     for w in result.weeks:
         r = {"week_key": w.week_key, "nav_start": w.nav_start, "nav_after_signal": w.nav_after_signal,
-             "nav_before_returns": w.nav_before_returns, "nav_end": w.nav_end,
-             "portfolio_return": w.portfolio_return}
+             "nav_before_returns": w.nav_before_returns, "nav_after_returns": w.nav_after_returns,
+             "nav_end": w.nav_end, "portfolio_return": w.portfolio_return}
         for c, v in w.ledger_end.components().items():
             r[f"value_{c}"] = v
         for s, v in w.ledger_before_returns.sleeve_weights().items():
@@ -148,6 +199,9 @@ def weekly_portfolio_rows(result, targets, assets) -> list:
         for a in ("stocks", "gold", "btc"):
             r[f"return_{a}"] = w.market.asset_returns.get(a)
         r["return_rf"] = w.market.rf_return
+        r["dividend_return"] = w.market.dividend_yield.get("stocks")
+        r["gross_dividend"] = math.fsum(d.gross_dividend for d in w.dividends)
+        r["dividend_reinvested"] = math.fsum(d.net_reinvested for d in w.dividends)
         r["trades"] = len(w.trades)
         r["traded_value"] = math.fsum(t.gross_traded_value for t in w.trades)
         r["transaction_costs"] = math.fsum(t.transaction_cost for t in w.trades)
@@ -155,7 +209,7 @@ def weekly_portfolio_rows(result, targets, assets) -> list:
         r["amounts_due"] = w.amounts_due.total
         r["payments"] = math.fsum(p.amount for p in w.payments)
         r["rebalance"] = w.rebalance.reason if w.rebalance else ""
-        r["taxes_paid"] = 0.0
+        r.update(weekly_tax_amounts(w, by_week.get(w.week_key, ())))
         for a in assets:
             r[f"state_{a}"] = w.effective_states[a]
         rows.append(r)

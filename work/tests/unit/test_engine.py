@@ -182,3 +182,19 @@ def test_lots_track_signal_trades():
     lots = res.final_lots["stocks"]
     assert [l.source for l in lots] == ["initial", "buy"] and lots[1].cost == -buy.net_cash_flow
     assert len(res.realizations) == 1
+
+
+def test_tax_reduces_nav_when_paid():
+    """TAX-005: a tax reduces cash/NAV exactly when it is paid - annual taxes in step 3 of the
+    payment week (not in the year they relate to), immediate taxes in step 5 of their week."""
+    from fixtures.builders import annual_tax_inputs, tax_hooks
+    import datetime as dt
+    inp = annual_tax_inputs(costs_bps=(0.0, 0.0))
+    hooks, tax = tax_hooks("signal-only", rf_interest_rate=0.0)
+    res = run_engine(inp, hooks)
+    for w in res.weeks:
+        step = dict(w.step_ledgers)
+        paid = sum(p.amount for p in w.payments)
+        assert abs(step[2].nav - step[3].nav - paid) < 1e-7          # no costs in this fixture
+        assert step[2].nav == w.nav_after_signal                        # nothing in step 2
+        assert (paid > 0) == (w.week_key in (dt.date(2001, 1, 5), dt.date(2002, 1, 4)))

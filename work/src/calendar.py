@@ -125,6 +125,16 @@ def first_return_week(start: Optional[dt.date], earliest: dt.date) -> dt.date:
     return max(first_key_on_or_after(start), earliest)
 
 
+def inception_date(first_return_week: dt.date) -> dt.date:
+    """Q-014 (RESOLVED): allocation happens one week before the first return week."""
+    return first_return_week - WEEK
+
+
+def elapsed_days(first_return_week: dt.date, last_return_week: dt.date) -> int:
+    """Q-014: elapsed_days = last_return_week - inception_date = 7 * number of return weeks."""
+    return (last_return_week - inception_date(first_return_week)).days
+
+
 def last_return_week(end: Optional[dt.date], latest: dt.date) -> dt.date:
     if end is None:
         return latest

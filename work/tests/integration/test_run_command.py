@@ -115,9 +115,9 @@ def test_run_costs_reduce_nav_monotonically():
     assert costly.weeks[-1].nav_end < free.weeks[-1].nav_end
 
 
-@pytest.mark.parametrize("extra", [{"tax": {"profile": "individual_pl"}},
-                                   {"tax": {"profile": "family_foundation_15"}},
-                                   {"tax": {"profile": "individual_pl"},
+@pytest.mark.parametrize("extra", [{"tax": {"profile": "family_foundation_15"}},
+                                   {"tax": {"profile": "family_foundation_19"}},
+                                   {"tax": {"profile": "family_foundation_19"},
                                     "portfolio": {"rebalance": "band", "rebalance_band_pp": 1}}])
 def test_unsupported_modes_are_refused(extra):
     with pytest.raises(NotImplementedCommand):
@@ -138,8 +138,9 @@ def test_run_cli_exit_codes(tmp_path):
             "--start", "2018-01-01", "--end", "2026-07-31", "--as-of-date", "2026-09-29"]
     ok = subprocess.run(base + ["--output-dir", str(tmp_path)], capture_output=True, text=True)
     assert ok.returncode == 0, ok.stderr
-    taxed = subprocess.run(base + ["--tax-profile", "individual_pl"], capture_output=True, text=True)
-    assert taxed.returncode == 3 and "tax module is not implemented" in taxed.stderr
+    taxed = subprocess.run(base + ["--tax-profile", "family_foundation_15"], capture_output=True,
+                           text=True)
+    assert taxed.returncode == 3 and "foundation profiles are not implemented" in taxed.stderr
     scan = subprocess.run([sys.executable, str(WORK / "backtest.py"), "delay-scan", "--asset", "stocks"],
                           capture_output=True, text=True)
     assert scan.returncode == 3 and "not implemented" in scan.stderr

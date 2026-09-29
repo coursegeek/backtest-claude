@@ -42,3 +42,14 @@ def test_rebalancing_and_funding_are_separate_layers():
     for mod in ("rebalancing", "sell_to_pay"):
         assert not imports(mod) & {"data_loader", "reporting", "app", "cli", "validation"}
     assert "rebalancing" not in imports("sell_to_pay")
+
+
+def test_tax_module_boundaries():
+    """TAX-001: taxes are a separate module plugged into the pipeline; the ledger, engine,
+    rebalancing and sell_to_pay know nothing about tax rules."""
+    assert imports("tax") <= {"engine", "errors", "models", "rf"}
+    for mod in ("engine", "ledger", "rebalancing", "sell_to_pay", "cost_basis", "costs"):
+        assert "tax" not in imports(mod), mod
+    text = (SRC / "engine.py").read_text(encoding="utf-8")
+    for word in ("0.19", "solidarity", "capital_gains", "loss_bucket"):
+        assert word not in text

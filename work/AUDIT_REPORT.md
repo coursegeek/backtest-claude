@@ -27,15 +27,15 @@ Core engine nie został napisany; powstały wyłącznie narzędzia audytowe, rap
 | Wszystkie wymagania | 379 |
 | MUST | 352 |
 | SHOULD | 27 |
-| Pytania/konflikty ogółem | 49 w audycie, 50 po dodaniu Q-050 (sesja 2) |
+| Pytania/konflikty ogółem | 49 w audycie, 50 po dodaniu Q-050 (sesja 2), 52 po dodaniu Q-051/Q-052 (sesja 5) |
 | **BLOCKER** (severity z audytu) | **6** (Q-002, Q-004, Q-005, Q-008, Q-012, Q-020) |
 | — po adjudykacji: DATA BLOCKER | 3 (Q-002, Q-004, Q-008) |
 | — po adjudykacji: RESOLVED | 3 blokery (Q-005, Q-012, Q-020) + Q-006 |
 | **MAJOR** | **20** |
-| MINOR | 23 (+ Q-050) |
+| MINOR | 23 (+ Q-050, Q-051, Q-052) |
 | MUST zmapowane bez blokera (`MAPPED`) | 340 w audycie → 347 po adjudykacji |
 | MUST zablokowane decyzją (`BLOCKED`) | 12 w audycie → 5 po adjudykacji (tylko DATA BLOCKER) |
-| MUST `PASS` | 0 w audycie; 139 po sesji 2; 165 po sesji 3 (sekcja 13) |
+| MUST `PASS` | 0 w audycie; 139 po sesji 2; 165 po sesji 3; 177 po sesji 4; 217 po sesji 5 (sekcja 13) |
 | SHOULD proponowane do odroczenia | 1 (ERR-007 cache) |
 | Kontrole danych | 58: 27 PASS, 12 FAIL, 14 WARN, 5 INFO |
 | Scenariusze AB + przykłady CLI | 20: 10 wykonalnych, 10 wymaga decyzji |
@@ -199,7 +199,7 @@ Repozytorium jest gotowe do rozpoczęcia implementacji warstw niezależnych od b
 6 blokerów; do tego czasu odpowiadające im wiersze pozostają `BLOCKED`, a V2 będzie emitować
 jawne ostrzeżenia lub czytelne błędy zamiast cichych założeń.
 
-## 12. Adjudykacje użytkownika (sesje 2–4)
+## 12. Adjudykacje użytkownika (sesje 2–5)
 
 | Pytanie | Status | Skutek |
 |---|---|---|
@@ -215,6 +215,12 @@ jawne ostrzeżenia lub czytelne błędy zamiast cichych założeń.
 | Q-049 tożsamość NAV (sesja 3) | RESOLVED | `abs(NAV - sum(components)) / max(1, abs(NAV)) <= 1e-10`; NAV z komponentów przez `math.fsum`. |
 | Q-050 SMA przez lukę (sesja 3) | RESOLVED | SMA z ostatnich `ma` dostępnych obserwacji; luka flagowana, przerywa liczniki, nie zeruje historii SMA; warm-up liczy obserwacje. |
 | Q-039 liczba rebalancingów (sesja 4) | RESOLVED | Trigger kalendarzowy: pierwszy zachowany rekord, którego Friday week_key jest w nowym miesiącu/kwartale/roku względem poprzedniego zachowanego rekordu; pierwszy rekord = alokacja początkowa (nie rebalance); `weekly` = każdy zachowany tydzień od drugiego; rebalance w kroku 3 tygodnia triggera. Band: wszystkie sleeve'y (stocks, gold, btc z rezerwami, rf_base) na końcu T, `>= band_pp/100`, wykonanie na początku następnego zachowanego tygodnia. |
+| Q-014 kalendarz runu (sesja 5) | RESOLVED | first_return_week = pierwszy Friday >= start (piątkowy start = pierwszy tydzień), last = ostatni Friday <= end, inception = first - 7 dni, elapsed_days = 7 * liczba tygodni zwrotu; CPI/proration tą samą konwencją. |
+| Q-015 pre-tax (sesja 5) | RESOLVED | Osobny deterministyczny shadow run: ten sam config, stawki podatkowe 0, koszty transakcyjne (i przyszłe koszty fundacji) pozostają; jeszcze nie zaimplementowany, tax engine gotowy (`TaxParams.zero_rates()`). |
+| Q-016 dywidenda a cost basis (sesja 5) | RESOLVED | Jednostki przesuwa `R_total - d`; brutto `V_start*d`, podatek `brutto*rate` w kroku 5, netto reinwestowane jako lot `dividend_reinvest` (koszt = netto); nie jest Trade (bez kosztów/turnover). |
+| Q-018 solver rebalancingu (sesja 5) | RESOLVED | Akceptacja istniejącego cost-aware solvera końcowego NAV (TEST-054). |
+| Q-029 rok podatkowy (sesja 5) | RESOLVED | Rok = rok Friday week_key; transakcje kroku 1 pierwszego tygodnia Y+1 należą do Y+1; zobowiązanie za Y ustalane w kroku 2 pierwszego zachowanego tygodnia Y+1. |
+| Q-035 tax_events (sesja 5) | RESOLVED | Pola week_key, event_type, category (tax/cost), settlement (weekly/annual/terminal), tax_year, gross_base, taxable_base, rate, amount, notes; total_tax_paid = suma category=tax; koszty transakcyjne tylko w trades.csv. |
 | Q-046 sell_to_pay (sesja 4) | RESOLVED | Wartości po kroku 1; A rf_base → B rezerwy pro rata → C stocks/gold/btc pro rata do wartości rynkowych z gross-up `N/(1-c)` ograniczonym do pozycji; każda sprzedaż aktualizuje cost basis i realizację; stan sygnału bez zmian; insolvency, gdy wartość likwidacyjna netto < należność; wynik niezależny od kolejności kluczy. |
 
 Wiersze MUST nadal `BLOCKED` (dane niekanoniczne): SEM-001, SEM-003, SCHEMA-005, SEM-007, TEST-038.
@@ -234,8 +240,18 @@ Wiersze MUST nadal `BLOCKED` (dane niekanoniczne): SEM-001, SEM-003, SCHEMA-005,
   `missing.return_policy=drop` są poza osią czasu portfela (ich obserwacje sygnałowe nie trafiają
   do maszyny stanów runu). Kwoty należne w testach są syntetyczne — moduł podatkowy nie istnieje.
 
-Stan macierzy: MUST — 177 `PASS`, 28 `IN_PROGRESS`, 142 `MAPPED`, 5 `BLOCKED` (DATA BLOCKER),
-0 `FAIL`; SHOULD — 10 `PASS`. Testy: `python -m pytest work` (wszystkie przechodzą). Żaden wiersz
+* Sesja 5: profil `individual_pl` w centralnym pipeline (`src/tax.py`): roczny netting
+  zrealizowanych zysków stocks+gold+btc wg roku Friday week_key, koszyki strat (5 lat,
+  oldest-first, `loss_offset_fraction`), podatek CG i danina solidarnościowa jako osobne pozycje
+  `AmountsDue` w kroku 2 pierwszego tygodnia Y+1 (płatność w kroku 3 przez rebalancing albo
+  sell_to_pay), podatek od dywidend (Q-016: cena jednostek o składnik cenowy, reinwestycja netto
+  jako lot) i od RF per składnik w kroku 5; `tax_events.csv`, `realizations.csv`,
+  `dividend_reinvestments.csv`, `tax_state.json`, `taxes_paid` w weekly_portfolio. Bez terminal
+  settlement (ostatni rok podatkowy pozostaje otwarty), bez fundacji, metryk i summary.csv.
+  Nowe pytania: Q-051 (external base daniny powyżej progu), Q-052 (semantyka polityk DIV-011).
+
+Stan macierzy: MUST — 217 `PASS`, 23 `IN_PROGRESS`, 107 `MAPPED`, 5 `BLOCKED` (DATA BLOCKER),
+0 `FAIL`; SHOULD — 11 `PASS`. Testy: `python -m pytest work` (wszystkie przechodzą). Żaden wiersz
 zablokowany przez Q-002/Q-004/Q-008 nie został oznaczony `PASS` na podstawie staged plików;
 dowody dla LBMA, segmentów SEM-001 i kanonicznego SCHEMA-005 pochodzą z syntetycznych fixture'ów.
 
@@ -243,13 +259,13 @@ dowody dla LBMA, segmentów SEM-001 i kanonicznego SCHEMA-005 pochodzą z syntet
 requirements_total=379
 must=352
 should=27
-questions_total=50
+questions_total=52
 blockers=6
 major=20
-minor=24
-must_mapped=142
+minor=26
+must_mapped=107
 must_blocked=5
-must_pass=177
+must_pass=217
 should_proposed_deferral=1
 input_checks=58
 checks_fail=12
@@ -261,9 +277,9 @@ scenarios_feasible=10
 scenarios_needs_decision=10
 blocker_ids=Q-002,Q-004,Q-005,Q-008,Q-012,Q-020
 data_blocker_ids=Q-002,Q-004,Q-008
-resolved_ids=Q-005,Q-006,Q-012,Q-017,Q-019,Q-020,Q-039,Q-046,Q-049,Q-050
-open_questions=37
+resolved_ids=Q-005,Q-006,Q-012,Q-014,Q-015,Q-016,Q-017,Q-018,Q-019,Q-020,Q-029,Q-035,Q-039,Q-046,Q-049,Q-050
+open_questions=33
 must_fail=0
-must_in_progress=28
-should_pass=10
+must_in_progress=23
+should_pass=11
 -->

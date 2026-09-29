@@ -98,3 +98,15 @@ def test_cli_009_band_rebalance(tmp_path):
     events = (out / "rebalance_events.csv").read_text().splitlines()
     assert len(events) > 1 and all(",band,band_rebalance," in e for e in events[1:])
     assert "band_rebalance" in (out / "trades.csv").read_text()
+
+
+def test_cli_individual_pl_run(tmp_path):
+    """--tax-profile individual_pl runs end-to-end and writes the tax audit files."""
+    r = cli("run", "--weights", "stocks=0.6,gold=0.2,btc=0.2", "--tax-profile", "individual_pl",
+            "--start", "2018-01-01", "--end", "2019-12-31", "--as-of-date", "2026-09-29",
+            "--output-dir", str(tmp_path))
+    assert r.returncode == 0, r.stderr
+    out = next(tmp_path.iterdir())
+    for name in ("tax_events.csv", "realizations.csv", "dividend_reinvestments.csv", "tax_state.json"):
+        assert (out / name).is_file(), name
+    assert "capital_gains_tax" in (out / "tax_events.csv").read_text()

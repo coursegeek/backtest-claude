@@ -1,17 +1,18 @@
 # IMPLEMENTATION_NOTES — Backtest V2 (clean-room)
 
-Stan: **foundation/core + core portfolio engine + rebalancing strategiczny i sell_to_pay**
-(sesja 4). Zaimplementowane: CLI i API importu, konfiguracja, modele, kalendarz, dostępność
-informacji, loadery z normalizacją kanoniczną, walidacja (semantyka luk Q-012), pipeline
-sygnałów, ledger, koszty transakcyjne, cost basis (lots), centralny tygodniowy engine PORT-011,
-rebalancing `signal-only/weekly/monthly/quarterly/annually(yearly)/band`, sell_to_pay
-(TAX-006) i finansowanie należności przy rebalancingu (TAX-007) oraz komenda `run` dla
-`tax.profile=none` we wszystkich trybach rebalancingu.
-Nie ma jeszcze: podatków (dywidendy, RF, roczne CG, solidarnościowy, fundacja), kosztów
-setup/admin fundacji, terminal settlement, metryk i `summary.csv`, `tax_events.csv`, scanów,
-optimize, tax-compare, walk-forward. Te tryby rozwiązują i walidują config, po czym kończą się
-kodem 3 z jawnym komunikatem (bez częściowych wyników). Kwoty należne (`AmountsDue`) są dziś
-podawane wyłącznie syntetycznie w testach — żaden moduł produkcyjny ich jeszcze nie tworzy.
+Stan: **foundation/core + core portfolio engine + rebalancing/sell_to_pay + podatki
+individual_pl** (sesja 5). Zaimplementowane: CLI i API importu, konfiguracja, modele,
+kalendarz, dostępność informacji, loadery z normalizacją kanoniczną, walidacja (semantyka luk
+Q-012), pipeline sygnałów, ledger, koszty transakcyjne, cost basis (lots), centralny tygodniowy
+engine PORT-011, rebalancing `signal-only/weekly/monthly/quarterly/annually(yearly)/band`,
+sell_to_pay (TAX-006), finansowanie należności przy rebalancingu (TAX-007) oraz moduł podatkowy
+`individual_pl` (`src/tax.py`: roczny CG z koszykami strat, danina solidarnościowa, podatek od
+dywidend z reinwestycją netto, podatek od RF); komenda `run` dla `tax.profile` none i
+individual_pl we wszystkich trybach rebalancingu.
+Nie ma jeszcze: terminal settlement (ostatni rok podatkowy runu pozostaje otwarty i nie jest
+rozliczany), profili fundacji i ich kosztów, pre-tax shadow run (Q-015 - silnik gotowy),
+metryk i `summary.csv`, scanów, optimize, tax-compare, walk-forward. Te tryby rozwiązują i
+walidują config, po czym kończą się kodem 3 z jawnym komunikatem (bez częściowych wyników).
 
 Źródło prawdy dla statusów: `compliance_matrix.csv`; pytania: `implementation_questions.csv`.
 
@@ -25,6 +26,8 @@ python work/backtest.py run --weights stocks=0.6,gold=0.2,btc=0.2 --start 2018-0
        --end 2026-07-31 --as-of-date 2026-09-29
 python work/backtest.py run --weights stocks=0.6,gold=0.2,btc=0.2 --rebalance band \
        --rebalance-band-pp 1 --start 2018-01-01 --end 2026-07-31      # S07 / CLI-009
+python work/backtest.py run --weights stocks=0.6,gold=0.2,btc=0.2 --tax-profile individual_pl \
+       --rebalance band --rebalance-band-pp 1 --start 2018-01-01 --end 2026-07-31
 python work/tools/check_audit_consistency.py --allow-pass
 ```
 
@@ -33,7 +36,7 @@ python work/tools/check_audit_consistency.py --allow-pass
 `work/backtest.py` (CLI + fasada importu) → `src/cli.py` → `src/app.py` (komendy).
 Warstwy: `models`, `errors`, `config`, `calendar`, `availability`, `data_loader`, `validation`,
 `signals`, `confirmation`, `scheduling`, `signal_analysis`, `allocation`, `rf`, `costs`,
-`cost_basis`, `ledger`, `engine`, `rebalancing`, `sell_to_pay`, `manifest`, `reporting`. `src` jest pakietem importowanym jako `src.*` (Q-044).
+`cost_basis`, `ledger`, `engine`, `rebalancing`, `sell_to_pay`, `tax`, `manifest`, `reporting`. `src` jest pakietem importowanym jako `src.*` (Q-044).
 
 ## Decyzje implementacyjne
 
@@ -199,13 +202,81 @@ Warstwy: `models`, `errors`, `config`, `calendar`, `availability`, `data_loader`
     przesunięcie między składnikami RF; `RebalanceEvent` — NAV po sygnale, amounts_due, NAV netto,
     NAV planowany i zrealizowany, koszty, wagi przed/po, odchylenie band. Pliki: `payments.csv`,
     `rf_transfers.csv`, `rebalance_events.csv` (obok weekly_portfolio/trades).
-30. **Przygotowanie Q-016**: `WeekMarket.unit_price_return(asset)` izoluje założenie, że cena
-    jednostki cost basis rośnie o zwrot całkowity (poprawne dla `tax.profile=none`); przy
-    niepustym `dividend_yield` metoda zgłasza `NotImplementedCommand` (TODO(Q-016)). Nowy kod
-    nie czyta zwrotu całkowitego do celów cost basis bezpośrednio.
+30. **Przygotowanie Q-016** (sesja 4; od sesji 5 rozstrzygnięte, pkt 36):
+    `WeekMarket.unit_price_return(asset)` jest jedynym miejscem, które przesuwa cenę jednostki
+    cost basis.
 31. **S07 (CLI-009)** na staged danych: `python work/backtest.py run --weights
     stocks=0.6,gold=0.2,btc=0.2 --rebalance band --rebalance-band-pp 1 --start 2018-01-01 --end
     2026-07-31` kończy się kodem 0: 448 tygodni, 170 zdarzeń `band_rebalance` (każde przekroczenie
     ≥1 pp na końcu T wykonane w T+1, wagi po kroku 3 = 60/20/20), 16 signal_exit, 14
     signal_reentry. To dowód mechaniki, nie zgodności danych: złoto/akcje to staged proxy
     (Q-002/Q-004), a `summary.csv` (metryki) nie istnieje, więc CLI-009 pozostaje IN_PROGRESS.
+
+## Podatki individual_pl (sesja 5)
+
+32. **Adjudykacje**: Q-014, Q-015, Q-016, Q-018, Q-029, Q-035 RESOLVED (treść w
+    implementation_questions.csv i AUDIT_REPORT §12). Nowe pytania: Q-051 (dosłowna formuła
+    daniny z external base powyżej progu), Q-052 (semantyka `actual_only` vs `error_on_estimate`).
+    Q-030 pozostaje formalnie OPEN; zaimplementowano formułę z polecenia sesji 5 (pkt 35).
+33. **Moduł `src/tax.py`** (TAX-001): `TaxParams` (stawki z `tax.individual.*`,
+    `zero_rates()` dla przyszłego shadow runu Q-015), `TaxEvent`, `LossBucket`,
+    `AnnualLiability`, `TaxState` (realizacje per rok, koszyki, wygasłe straty, zobowiązania
+    roczne, sumy zapłacone, audyt zdarzeń; `copy()`/`to_dict()` - przenoszalny między oknami
+    walk-forward) i `IndividualTaxHooks` (kroki 2, 5, 6). Engine, ledger, rebalancing i
+    sell_to_pay nie zawierają reguł podatkowych; `engine.ComposedHooks(funding, *extensions)`
+    łączy politykę kroku 3/6 (StrategicHooks) z rozszerzeniami (podatki; później fundacja).
+34. **Rok podatkowy (Q-029)**: każda `Realization` (signal exit, rebalance, sell_to_pay, później
+    terminal) trafia do roku swojego Friday week_key. W kroku 2 pierwszego zachowanego tygodnia
+    roku Y+1 zamykane są wszystkie wcześniejsze otwarte lata (zwykle jeden): netting
+    stocks+gold+btc (bez mark-to-market, bez dywidend i RF), koszyki strat, CG i danina.
+    Transakcje kroku 1 tego tygodnia należą już do Y+1; sprzedaże sell_to_pay z kroku 3 też.
+    Ostatni (otwarty) rok runu nie jest rozliczany - wymaga terminal settlement.
+35. **Koszyki strat (IND-009/010/013)**: roczna strata netto roku Y tworzy koszyk używalny w
+    Y+1..Y+N (N = `loss_carryforward_years`, domyślnie 5), zużywany oldest-first; przy dodatnim
+    zysku `eligible_offset = min(suma pozostałych niewygasłych sald * loss_offset_fraction,
+    zysk)`; `taxable = max(0, zysk - offset)`; po zamknięciu roku Y+N koszyk wygasa (zapis w
+    `expired_losses`).
+36. **CG i danina (IND-001..005, IND-018)**: `CG = taxable * capital_gains_rate`;
+    `solidarity_base = max(0, taxable) + external_solidarity_base_pln`, `solidarity =
+    solidarity_rate * max(0, base - threshold)` - dosłownie (Q-051). Dwa osobne TaxEvent
+    (settlement=annual, pipeline_step=2, tax_year=Y, także z kwotą 0 - pełny audyt każdego
+    zamkniętego roku) i dwie osobne pozycje `AmountsDue` (`capital_gains_tax`,
+    `solidarity_tax`, tylko > 0). Płatność wyłącznie w kroku 3: z wpływów rebalancingu (TAX-007),
+    jeśli jest trigger, inaczej TAX-006 sell_to_pay; `Payment.event_type` = typ podatku. Hook
+    kroku 6 uzgadnia płatności z zobowiązaniami (`paid_week`) i sumy zapłacone.
+37. **Dywidendy (DIV-001..008, Q-016)**: tylko dostarczony `dividend_return` (nigdy FF − SPX).
+    Krok 4: ledger akcji rośnie o `R_total` (ekonomia brutto), cena jednostki o
+    `R_total − d`. Krok 5: `gross = stocks_before_returns * d`, `tax = gross * dividend_rate`
+    potrącony z wartości akcji (`WorkingPortfolio.settle_dividend`), netto otwiera lot
+    `dividend_reinvest` (koszt = netto, jednostki po bieżącej cenie) - `DividendReinvestment`, nie
+    `Trade`: bez kosztów, slippage, turnover i trade_count. Po kroku 5
+    `stock_end = stock_start * (1 + R_total − d*rate)`. Dywidendy nierozliczone przez hook
+    (np. profil none z danymi) engine reinwestuje brutto (stawka 0). Po kroku 5 engine sprawdza
+    `units * unit_price == wartość` każdego aktywa. Tryby: `smoothed_weekly` (plik tygodniowy,
+    wymagane źródło zakresu NORM-011 i każdego tygodnia runu, brak => missing.return_policy),
+    `exact` (plik cash-date Q-036, dywidenda w tygodniu pay_date, inne tygodnie 0), `off` (brak
+    podatku, cena jednostki o zwrot całkowity). DIV-011 wg Q-052; status trafia do
+    `tax_events.source_status`. Staged plik dywidend (proxy, wszystkie wiersze `estimate`)
+    pozostaje DATA BLOCKER Q-008 - dowody mechaniki pochodzą z syntetycznych fixture'ów.
+38. **RF (IND-014/015, PORT-013, RISK-006)**: dla rf_base i każdej rezerwy `income =
+    max(0, value_before_returns * R_rf)`, `tax = income * rf_interest_rate` potrącony z tego samego
+    składnika w kroku 5 (`WorkingPortfolio.withhold`, bez Payment i bez sell_to_pay); ujemny RF
+    nie tworzy podatku ani ulgi; równoważne `R_rf_net = R_rf − max(R_rf, 0) * rate`.
+39. **Kolejność kroku 5**: podatki bieżące po zwrotach kroku 4 i przed krokiem 6; nie zmieniają
+    ekspozycji zwrotu tygodnia (`ledger_before_returns`), zmieniają wagi końca tygodnia, więc
+    mogą wywołać przyszły trigger band (`tests/unit/test_tax.py::test_immediate_taxes_step5_timing`).
+40. **Bez podwójnego zapisu przepływów**: podatek roczny = TaxEvent (ustalenie) + AmountsDue +
+    Payment (odpływ w kroku 3); podatek od dywidend = TaxEvent + potrącenie z akcji w kroku 5;
+    podatek RF = TaxEvent + potrącenie ze składnika RF. `weekly_portfolio.taxes_paid` =
+    płatności kategorii tax + podatki tygodniowe danego tygodnia (kolumny `annual_tax_paid`,
+    `dividend_tax`, `rf_interest_tax`), a `Σ taxes_paid = Σ tax_events(category=tax) =
+    TaxState.total_tax_paid()` (TEST-024 w zakresie istniejących zdarzeń).
+41. **Wyjścia**: `tax_events.csv` (pola Q-035 + TAX-004: date, tax_base, tax_due, asset,
+    component, pipeline_step, source_status), `realizations.csv`, `dividend_reinvestments.csv`,
+    `tax_state.json` (parametry, stan, otwarty rok), weekly_portfolio z `nav_after_returns`,
+    dywidendami i podatkami; manifest z `inception_date` i `elapsed_days` (Q-014).
+42. **Run na staged danych** (`--tax-profile individual_pl --rebalance band --rebalance-band-pp 1
+    --transaction-cost-bps 10`, 2018-01-01..2026-07-31): kod 0; koniec zakresu obcięty do
+    2026-06-26 (koniec staged pliku dywidend, ostrzeżenia NORM-011), 443 tygodnie, zdarzenia
+    dividend_tax/rf_interest_tax co tydzień, CG i danina dla lat 2018-2025, rok 2026 otwarty;
+    Σ zdarzeń = Σ taxes_paid = total_tax_paid. Tylko dowód mechaniki (Q-002/Q-004/Q-008).

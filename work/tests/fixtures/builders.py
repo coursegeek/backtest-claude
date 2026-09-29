@@ -102,3 +102,49 @@ def engine_inputs(histories, first, targets, returns=None, rf=0.0, params=None, 
     return EngineInputs(weeks=tuple(weeks), market=market, signal_series=series, params=prm,
                         targets=full_targets, initial_capital=capital,
                         costs=costs or CostModel(), trace=trace)
+
+
+def with_dividends(inputs, d, status="actual", asset="stocks"):
+    """Attach a supplied dividend return (scalar or one value per run week) to EngineInputs."""
+    import dataclasses
+    market = {}
+    for i, w in enumerate(inputs.weeks):
+        m = inputs.market[w]
+        v = d[i] if isinstance(d, (list, tuple)) else d
+        market[w] = dataclasses.replace(m, dividend_yield={asset: v} if v else {},
+                                        dividend_status={asset: status} if v else {})
+    return dataclasses.replace(inputs, market=market)
+
+
+def tax_hooks(mode="signal-only", band_pp=None, params=None, state=None, **overrides):
+    """StrategicHooks composed with individual_pl tax hooks (defaults of the specification)."""
+    import dataclasses
+    from src.engine import ComposedHooks
+    from src.rebalancing import StrategicHooks
+    from src.tax import IndividualTaxHooks, TaxParams
+    p = dataclasses.replace(params or TaxParams(), **overrides)
+    tax = IndividualTaxHooks(p, state)
+    return ComposedHooks(StrategicHooks(mode, band_pp), tax), tax
+
+
+def annual_tax_inputs(costs_bps=(10.0, 5.0), last="2002-01-18", reentry=True, targets=None):
+    """Year-end scenario for annual taxes (weeks from 2000-01-07, run from 2000-02-04):
+    stocks 70% / gold 30% / rf 0; stocks +100% on 2000-03-03, a signal exit (sell half) on
+    2000-06-09 realises a large 2000 gain, a re-entry on 2000-09-08 spends the whole reserve;
+    stocks +10% on 2000-10-06 and +8% on 2000-12-29 (band shock before the year end). With
+    rf_base and every reserve at zero on 2001-01-05 a tax can only be funded by selling assets."""
+    from src.costs import CostModel
+    k0 = dt.date(2000, 1, 7)
+    idx = lambda day: (day - k0).days // 7                                   # noqa: E731
+    n = idx(d(last)) + 1
+    hist = [100.0] * idx(dt.date(2000, 6, 2)) + [50.0] * (idx(dt.date(2000, 9, 1)) - idx(dt.date(2000, 6, 2)))
+    hist += [200.0 if reentry else 50.0] * (n - len(hist))
+    rets = [0.0] * (n - 4)
+    for day, r in ((dt.date(2000, 3, 3), 1.0), (dt.date(2000, 10, 6), 0.1), (dt.date(2000, 12, 29), 0.08)):
+        rets[idx(day) - 4] = r
+    return engine_inputs({"stocks": hist, "gold": [100.0] * n}, first=4,
+                         targets=targets or {"stocks": 0.7, "gold": 0.3},
+                         returns={"stocks": rets, "gold": [0.0] * (n - 4)},
+                         params={"stocks": params_for("stocks"),
+                                 "gold": params_for("gold", threshold_off=0.9, threshold_on=0.9)},
+                         costs=CostModel(*costs_bps))

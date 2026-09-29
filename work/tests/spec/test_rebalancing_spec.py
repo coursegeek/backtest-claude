@@ -270,3 +270,71 @@ def test_rebalance_net_of_amounts_due(bps):
         assert costs > 0
         for t in pf.trades:
             assert abs(t.transaction_cost - t.gross_traded_value * bps[0] / 1e4) < 1e-12
+
+
+def test_annual_cashflow_timing():
+    """TEST-046 / PORT-011, IND-006, TAX-006, TAX-007, Q-029: the annual tax of year Y is
+    determined in step 2 of the first retained week of Y+1 (never paid in step 2) and paid in
+    step 3 of that week: from the sale proceeds of a strategic rebalance when a trigger exists
+    (targets on NAV_after_signal - amounts_due, no sell_to_pay), otherwise by TAX-006
+    sell_to_pay. Sales made to fund the tax realise gains of Y+1, never of Y. A synthetic
+    cost item (the foundation annual cost is not implemented) is funded in the same step."""
+    from fixtures.builders import annual_tax_inputs, tax_hooks
+    from src.engine import AmountsDue, ComposedHooks, PipelineHooks
+    from src.rebalancing import StrategicHooks
+    from src.tax import IndividualTaxHooks, TaxParams
+
+    Y1 = D("2001-01-05")
+
+    class SyntheticCost(PipelineHooks):
+        def amounts_due(self, ctx, portfolio):
+            return AmountsDue(40_000.0, (("synthetic_annual_cost", 40_000.0),)) if ctx.week == Y1 \
+                else AmountsDue()
+
+    inp = annual_tax_inputs()
+    results = {}
+    for mode in ("signal-only", "annually"):
+        tax = IndividualTaxHooks(TaxParams())
+        res = run_engine(inp, ComposedHooks(StrategicHooks(mode), tax, SyntheticCost()))
+        results[mode] = (res, tax)
+        exits = [t for t in res.trades if t.reason == TradeReason.SIGNAL_EXIT]
+        assert [t.week_key for t in exits] == [D("2000-06-09")] and exits[0].realized_gain > 0
+        liab = tax.state.annual_liabilities[2000]
+        assert liab.determined_week == Y1 and liab.annual_realized == exits[0].realized_gain
+        assert liab.capital_gains_tax == pytest.approx(0.19 * exits[0].realized_gain, rel=1e-15)
+        w = next(x for x in res.weeks if x.week_key == Y1)
+        assert w.amounts_due.items == (("capital_gains_tax", liab.capital_gains_tax),
+                                       ("synthetic_annual_cost", 40_000.0))
+        step = dict(w.step_ledgers)
+        assert step[2] == w.ledger_after_signal                         # nothing paid in step 2
+        assert math.fsum(p.amount for p in w.payments) == pytest.approx(w.amounts_due.total, rel=1e-12)
+        assert {p.pipeline_step for p in w.payments} == {3}
+        assert w.nav_before_returns == pytest.approx(
+            w.nav_after_signal - w.amounts_due.total
+            - math.fsum(t.transaction_cost + t.slippage for t in w.trades), rel=1e-12)
+        funding = [t for t in w.trades if t.pipeline_step == 3]
+        assert funding and all(t.side == "sell" or mode == "annually" for t in funding)
+        # every sale of the payment week belongs to tax year 2001 (Q-029), not to 2000
+        wk_real = [r for r in res.realizations if r.week_key == Y1]
+        assert wk_real and all((a, g, Y1) in tax.state.realizations[2001] for a, g in
+                               ((r.asset, r.realized_gain) for r in wk_real))
+        assert Y1 not in {x for _, _, x in tax.state.realizations[2000]}
+        l2001 = tax.state.annual_liabilities[2001]
+        assert l2001.annual_realized == pytest.approx(math.fsum(r.realized_gain for r in wk_real), rel=1e-12)
+        assert l2001.determined_week == D("2002-01-04")
+
+    res, tax = results["signal-only"]                                   # A: no trigger
+    w = next(x for x in res.weeks if x.week_key == Y1)
+    assert w.rebalance is None and w.ledger_after_signal.rf_base == 0.0
+    assert all(p.context.startswith("sell_to_pay:C") for p in w.payments)
+    assert [(t.asset, t.reason) for t in w.trades] == [("stocks", TradeReason.SELL_TO_PAY),
+                                                        ("gold", TradeReason.SELL_TO_PAY)]
+    res, tax = results["annually"]                                      # B: calendar trigger
+    w = next(x for x in res.weeks if x.week_key == Y1)
+    assert w.rebalance is not None and w.rebalance.reason == TradeReason.CALENDAR_REBALANCE
+    assert w.rebalance.amounts_due == w.amounts_due.total
+    assert w.rebalance.nav_net_for_rebalance == w.nav_after_signal - w.amounts_due.total
+    assert {p.context for p in w.payments} == {"strategic_rebalance"}
+    assert not any(t.reason == TradeReason.SELL_TO_PAY for t in res.trades)
+    for s, v in w.ledger_before_returns.sleeve_weights().items():
+        assert abs(v - inp.targets[s]) < 1e-12

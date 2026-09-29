@@ -67,3 +67,19 @@ def test_missing_keys_and_grid():
     keys = [D("1933-02-24"), D("1933-03-03"), D("1933-03-17")]
     assert missing_keys(keys) == [D("1933-03-10")]
     assert weekly_grid(D("1933-03-03"), D("1933-03-17")) == [D("1933-03-03"), D("1933-03-10"), D("1933-03-17")]
+
+
+def test_inception_and_elapsed_days():
+    """Q-014 (RESOLVED): first return week = first Friday key >= start (a Friday start is its
+    own first return week), last = last Friday key <= end, inception = first - 7 days,
+    elapsed_days = last - inception = 7 * number of return weeks."""
+    from src.calendar import elapsed_days, first_return_week, inception_date, last_return_week
+    early = dt.date(1900, 1, 5)
+    assert first_return_week(dt.date(2018, 1, 5), early) == dt.date(2018, 1, 5)     # Friday
+    assert first_return_week(dt.date(2018, 1, 6), early) == dt.date(2018, 1, 12)
+    first = first_return_week(dt.date(2018, 1, 1), early)
+    last = last_return_week(dt.date(2026, 7, 31), dt.date(2030, 1, 4))
+    assert (first, last, inception_date(first)) == (dt.date(2018, 1, 5), dt.date(2026, 7, 31),
+                                                   dt.date(2017, 12, 29))
+    n = (last - first).days // 7 + 1
+    assert elapsed_days(first, last) == 7 * n == 3136

@@ -397,3 +397,20 @@ class RebalanceEvent:
     weights_before: dict
     weights_after: dict
     max_deviation: Optional[float] = None   # band trigger evidence
+
+
+@dataclass(frozen=True)
+class DividendReinvestment:
+    """Step-5 settlement of a supplied dividend return (DIV-005..007, Q-016): total-return
+    accounting, not a trade (no cost, slippage, turnover or trade count)."""
+    week_key: dt.date
+    asset: str
+    value_before_returns: float     # exposure used for the week's return
+    dividend_return: float
+    gross_dividend: float           # value_before_returns * dividend_return
+    dividend_tax: float             # withheld from the asset
+    net_reinvested: float           # new lot cost
+    units: float
+    unit_price: float               # price-component unit price after step 4
+    lot_id: int
+    pipeline_step: int = 5
