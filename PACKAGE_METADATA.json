@@ -1,0 +1,16 @@
+{
+  "package_version": "1.0",
+  "purpose": "Independent clean-room V2 reference implementation",
+  "source_repository": "coursegeek/backtest-cc-strategy",
+  "baseline_main_commit_observed": "105b688eeda418b7daf7a091acb3a647567ad57a",
+  "spec_git_blob_sha1": "b0e5fdcd123155279f2137e10ddedc809477b263",
+  "forbidden_v1_paths": [
+    "backtest.py",
+    "src/",
+    "tests/",
+    "configs/",
+    "README.md",
+    "backtest_deferred_backlog_after_release_1_0.csv"
+  ],
+  "freeze_before_ab": true
+}

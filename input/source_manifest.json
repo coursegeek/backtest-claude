@@ -1,0 +1,73 @@
+{
+  "package_version": "1.0",
+  "source_repository": "coursegeek/backtest-cc-strategy",
+  "baseline_main_commit_observed": "105b688eeda418b7daf7a091acb3a647567ad57a",
+  "source_checkout_head": "105b688eeda418b7daf7a091acb3a647567ad57a",
+  "cleanroom_policy": "Only the explicitly whitelisted specification and data files were copied.",
+  "files": [
+    {
+      "role": "specification",
+      "source_repo_path": "python_backtest_specification_v3_1.csv",
+      "staged_path": "input/python_backtest_specification_v3_1.csv",
+      "bytes": 80524,
+      "git_blob_sha1": "b0e5fdcd123155279f2137e10ddedc809477b263",
+      "sha256": "a7f73bfd6c6163167d91d37f3835f4c541da1407960624bd214bd93ba97c37d1"
+    },
+    {
+      "role": "btc_raw_input",
+      "source_repo_path": "data/BTC_REAL_weekly_2010_2026.csv",
+      "staged_path": "input/data/BTC_REAL_weekly_2010_2026.csv",
+      "bytes": 73728,
+      "git_blob_sha1": "17d9d3e57181dbbabb8bcdc1c84106b1beea8d69",
+      "sha256": "147ae79a6973d5b2d175c85cd6502f1e6647e7fa1629b49175842612316f2f26"
+    },
+    {
+      "role": "cpi_input",
+      "source_repo_path": "data/CPIAUCNS.csv",
+      "staged_path": "input/data/CPIAUCNS.csv",
+      "bytes": 25074,
+      "git_blob_sha1": "15297bfc83b487cbd07d584da7c1402b6453504e",
+      "sha256": "f79e3a78837142293449cee4a1a9b1da7be677fb3e989ffb2ef48e8e7cf4cdd7"
+    },
+    {
+      "role": "stocks_return_input",
+      "source_repo_path": "data/F-F_Research_Data_Factors_weekly.csv",
+      "staged_path": "input/data/F-F_Research_Data_Factors_weekly.csv",
+      "bytes": 240788,
+      "git_blob_sha1": "b83cbb6ee0b1064c708d10cb3d6d4ad91c5cb495",
+      "sha256": "0f3a628d7c1c9099e29b981f75ae39386196d2e8205cc6c7edfc0487942abd6f"
+    },
+    {
+      "role": "gold_raw_input",
+      "source_repo_path": "data/GOLD_REAL_weekly_1970_2026.csv",
+      "staged_path": "input/data/GOLD_REAL_weekly_1970_2026.csv",
+      "bytes": 134949,
+      "git_blob_sha1": "b3d823df33b8dc96a994f77b280c5de986ddf136",
+      "sha256": "5105a0f58b24005cfb3c63e924e954309a374c48380ed6efa4702db25e15eacc"
+    },
+    {
+      "role": "dividend_raw_input",
+      "source_repo_path": "data/SPX_dividend_return_weekly_shiller.csv",
+      "staged_path": "input/data/SPX_dividend_return_weekly_shiller.csv",
+      "bytes": 384113,
+      "git_blob_sha1": "03f970d520c32b0ee80f7f82320f908135ae8b48",
+      "sha256": "d659a1c2d2ba0166777381dc58524ed203dd7d0d76152eabade0b5fa3b386e37"
+    },
+    {
+      "role": "stocks_signal_raw_input",
+      "source_repo_path": "data/US_STOCK_PRICE_WEEKLY_REAL_1919_2026.csv",
+      "staged_path": "input/data/US_STOCK_PRICE_WEEKLY_REAL_1919_2026.csv",
+      "bytes": 150448,
+      "git_blob_sha1": "df4af5538911b1a1ffe3af36850d19d17f06dcf3",
+      "sha256": "e3b3f06f1c5b0017b79d4cb32b925d4e998d0d58973e35dd0675953ed51a56a5"
+    },
+    {
+      "role": "supplemental_schwert_source",
+      "source_repo_path": "data/US_STOCK_PRICE_WEEKLY_schwert_1919_1962.csv",
+      "staged_path": "input/data/US_STOCK_PRICE_WEEKLY_schwert_1919_1962.csv",
+      "bytes": 58027,
+      "git_blob_sha1": "c38147a009301a4b54b031e5cbb9ff7d0f2b67b9",
+      "sha256": "4d0f91bd40ba6dccb79fd4d5cb58e813aec3c27ceefc49c0cadf770025360901"
+    }
+  ]
+}
