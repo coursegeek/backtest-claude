@@ -114,6 +114,14 @@ def main() -> int:
         for t in [x.strip() for x in r["test"].split(";") if x.strip()]:
             if not t.startswith(TEST_DIRS):
                 err(f"matrix {rid}: test path outside tests/{{spec,unit,property,integration}}: {t}")
+        if r["status"] == "PASS":
+            for t in [x.strip() for x in r["test"].split(";") if x.strip()]:
+                path, _, func = t.partition("::")
+                f = WORK / path
+                if not f.is_file():
+                    err(f"matrix {rid}: PASS test file missing: {path}")
+                elif func and f"def {func.split('[')[0]}(" not in f.read_text(encoding="utf-8"):
+                    err(f"matrix {rid}: PASS test function missing: {t}")
         if rid.startswith("TEST-") and not r["test"].startswith("tests/spec/"):
             err(f"matrix {rid}: specification test must live in tests/spec/")
 
@@ -246,6 +254,8 @@ def main() -> int:
             "resolved_ids": ",".join(q["question_id"] for q in questions if q["status"] == "RESOLVED"),
             "open_questions": sum(1 for q in questions if q["status"] == "OPEN"),
             "must_fail": sum(1 for r in matrix if r["priority"] == "MUST" and r["status"] == "FAIL"),
+            "must_in_progress": sum(1 for r in matrix if r["priority"] == "MUST" and r["status"] == "IN_PROGRESS"),
+            "should_pass": sum(1 for r in matrix if r["priority"] == "SHOULD" and r["status"] == "PASS"),
         }
         for k, v in actual.items():
             if k not in claimed:

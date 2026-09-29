@@ -36,6 +36,9 @@ Mapa każdego wymagania na moduł/test jest w `work/compliance_matrix.csv`.
 | Concern (zakres) | Moduł | Odpowiedzialność | Kluczowe wymagania | Czego NIE robi |
 |---|---|---|---|---|
 | config / CLI | `backtest.py`, `src/cli.py`, `src/config.py` | komendy `run`, `signals`, `delay-scan`, `threshold-scan`, `optimize`, `rebalance-scan`, `tax-compare`; defaulty DEF-*, precedencja CLI > plik > defaulty, konwersja jednostek, `config_resolved.yaml` | META-001/004/005, DEF-*, ALLOC-001..003, RUN-*, CLI-* | obliczeń |
+| błędy | `src/errors.py` | hierarchia wyjątków z kodami wyjścia CLI (ERR-001..004, ConfigError, LookAheadError, NotImplementedCommand) | ERR-* | logiki |
+| komendy | `src/app.py` | implementacje komend za CLI i API importu (obecnie `signals`; komendy portfelowe walidują config i kończą się NotImplementedCommand) | META-001, NORM-012 | obliczeń |
+| signal pipeline | `src/signal_analysis.py` | złożenie signals → confirmation → scheduling, rekonstrukcja stanu przed startem, analiza signal-only | SIG-003/016/018/019, NORM-012 | księgowości |
 | modele | `src/models.py` | typy: `Observation`, `SourceSeries`, `SignalParams`, `SignalState`, `ScheduledExecution`, `Lot`, `Trade`, `TaxEvent`, `PortfolioState`, `WeekRecord`, `RunResult` | ARCH-* | logiki |
 | data loading / normalization | `src/data_loader.py` | parsery ról: stocks signal, FF CSV/ZIP, gold, BTC, dywidendy smoothed/exact, CPI, extra assets, distribution file; rozwiązywanie ścieżek i aliasów (Q-001); proweniencja (SHA256, zakres, liczba wierszy, segmenty źródeł) | DATA-*, SCHEMA-*, NORM-001/006/008/009/014/015, PORT-001..004, SEM-* | decyzji o polityce braków |
 | calendar | `src/calendar.py` | `friday_key`, mapowanie FF same-calendar-week, `week_start+4`, agregacja daily→weekly, granice okresów po Friday key, wspólny zakres (NORM-011), mapowanie `--start/--end` (Q-014), kompletność tygodni (NORM-019, Q-007) | NORM-007/008/009/011/013/019/020, REB-006, RUN-001/002 | dostępności informacji |
@@ -243,13 +246,14 @@ kalendarzowe, rolling (MET-022/023).
 `ConfigError` (waluta, wagi, jednostki), `InsolvencyError` (TAX-006), `LookAheadError`
 (asercja availability). Kod wyjścia CLI ≠ 0 i komunikat z nazwą klucza configu.
 
-## 14. Decyzje oczekujące i domyślne propozycje
+## 14. Decyzje (stan po adjudykacji)
 
-Blokery do decyzji użytkownika przed oznaczeniem PASS: Q-002 (złoto nie-LBMA), Q-004 (splice
-akcji 1962), Q-005 (konwencja daty BTC), Q-008 (schemat/status dywidend), Q-012 (luki historyczne
-vs polityki `error`), Q-020 (CLI-011 niewykonalne). Implementacja może iść naprzód z propozycjami
-z kolumny `proposed_interpretation`, każda za przełącznikiem configu; zmiana decyzji nie wymaga
-zmiany architektury.
+RESOLVED: Q-005 (normalizacja BTC Monday→Friday, zakres SEM-008), Q-006, Q-012 (luki kalendarza:
+cała historia, luka przerywa liczniki, polityki tylko dla brakującego źródła w tygodniu kalendarza
+runu), Q-020 (brak skracania okna treningowego). DATA BLOCKER (bez wpływu na implementację, tylko
+na PASS wymagań o danych kanonicznych): Q-002 złoto LBMA, Q-004 provenance splice akcji, Q-008
+schemat dywidend. Pozostałe pytania MAJOR/MINOR są implementowane wg `proposed_interpretation`
+za przełącznikami configu i opisane w `IMPLEMENTATION_NOTES.md`.
 
 ## 15. Kolejność implementacji
 

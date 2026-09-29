@@ -27,15 +27,15 @@ Core engine nie został napisany; powstały wyłącznie narzędzia audytowe, rap
 | Wszystkie wymagania | 379 |
 | MUST | 352 |
 | SHOULD | 27 |
-| Pytania/konflikty ogółem | 49 |
+| Pytania/konflikty ogółem | 49 w audycie, 50 po dodaniu Q-050 (sesja 2) |
 | **BLOCKER** (severity z audytu) | **6** (Q-002, Q-004, Q-005, Q-008, Q-012, Q-020) |
 | — po adjudykacji: DATA BLOCKER | 3 (Q-002, Q-004, Q-008) |
 | — po adjudykacji: RESOLVED | 3 blokery (Q-005, Q-012, Q-020) + Q-006 |
 | **MAJOR** | **20** |
-| MINOR | 23 |
+| MINOR | 23 (+ Q-050) |
 | MUST zmapowane bez blokera (`MAPPED`) | 340 w audycie → 347 po adjudykacji |
 | MUST zablokowane decyzją (`BLOCKED`) | 12 w audycie → 5 po adjudykacji (tylko DATA BLOCKER) |
-| MUST `PASS` | 0 (nic nie jest jeszcze zaimplementowane) |
+| MUST `PASS` | 0 w audycie; 139 po sesji 2 (sekcja 13) |
 | SHOULD proponowane do odroczenia | 1 (ERR-007 cache) |
 | Kontrole danych | 58: 27 PASS, 12 FAIL, 14 WARN, 5 INFO |
 | Scenariusze AB + przykłady CLI | 20: 10 wykonalnych, 10 wymaga decyzji |
@@ -213,17 +213,25 @@ jawne ostrzeżenia lub czytelne błędy zamiast cichych założeń.
 
 Wiersze MUST nadal `BLOCKED` (dane niekanoniczne): SEM-001, SEM-003, SCHEMA-005, SEM-007, TEST-038.
 
+## 13. Stan implementacji (sesja 2)
+
+Zaimplementowano warstwę foundation/core (szczegóły: `IMPLEMENTATION_NOTES.md`). Stan macierzy:
+MUST — 139 `PASS`, 26 `IN_PROGRESS`, 182 `MAPPED`, 5 `BLOCKED` (DATA BLOCKER), 0 `FAIL`;
+SHOULD — 8 `PASS`. Testy: `python -m pytest work` (wszystkie przechodzą). Żaden wiersz
+zablokowany przez Q-002/Q-004/Q-008 nie został oznaczony `PASS` na podstawie staged plików;
+dowody dla LBMA, segmentów SEM-001 i kanonicznego SCHEMA-005 pochodzą z syntetycznych fixture'ów.
+
 <!-- AUDIT_COUNTS
 requirements_total=379
 must=352
 should=27
-questions_total=49
+questions_total=50
 blockers=6
 major=20
-minor=23
-must_mapped=347
+minor=24
+must_mapped=182
 must_blocked=5
-must_pass=0
+must_pass=139
 should_proposed_deferral=1
 input_checks=58
 checks_fail=12
@@ -236,6 +244,8 @@ scenarios_needs_decision=10
 blocker_ids=Q-002,Q-004,Q-005,Q-008,Q-012,Q-020
 data_blocker_ids=Q-002,Q-004,Q-008
 resolved_ids=Q-005,Q-006,Q-012,Q-020
-open_questions=42
+open_questions=43
 must_fail=0
+must_in_progress=26
+should_pass=8
 -->

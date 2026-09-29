@@ -1,0 +1,39 @@
+# Clean-room staged data profile (Q-001).
+#
+# Used only when the specification default file name for a role does not exist in data.dir
+# and the role was not overridden with an existing file. Every use is recorded as
+# resolved_via_alias in data_manifest.json and warned about in validation_report.csv.
+#
+# Adjudications (work/implementation_questions.csv):
+#   Q-002 gold: staged TVC/OANDA series is a non-canonical proxy, never LBMA PM evidence.
+#   Q-004 stocks: staged series splices Schwert->SPX in 1962 (not 1928); provenance of
+#         SEM-001 is not satisfied, segments below are declared from audit evidence.
+#   Q-005 btc: raw Monday-Sunday file, canonical normalisation to Friday keys and the
+#         SEM-008 canonical range.
+#   Q-008 dividend: staged Shiller file lacks SCHEMA-005 columns; non-canonical proxy.
+profile: cleanroom_staged
+aliases:
+  stocks_price:
+    file: US_STOCK_PRICE_WEEKLY_REAL_1919_2026.csv
+    adapter: single_series
+    segments:
+      - source: Schwert
+        from: "1920-01-02"
+        to: "1962-06-29"
+        verified: true
+        note: identical row by row to US_STOCK_PRICE_WEEKLY_schwert_1919_1962.csv (audit A-STK-008)
+      - source: SPX (rebased, inferred)
+        from: "1962-07-06"
+        to: "2026-09-18"
+        verified: false
+        note: differs from the Schwert file from week_start 1962-07-02; origin not recorded in file
+  gold:
+    file: GOLD_REAL_weekly_1970_2026.csv
+    adapter: tvc_oanda_proxy
+  btc:
+    file: BTC_REAL_weekly_2010_2026.csv
+    adapter: raw_monday_week_start
+    range: ["2011-07-08", "2026-09-18"]
+  dividend:
+    file: SPX_dividend_return_weekly_shiller.csv
+    adapter: shiller_proxy
