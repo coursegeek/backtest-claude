@@ -237,3 +237,140 @@ def weekly_portfolio_rows(result, targets, assets, tax_events=()) -> list:
             r[f"state_{a}"] = w.effective_states[a]
         rows.append(r)
     return rows
+
+
+# ============================================================================ summary.csv
+# REP-002, REP-012, REP-017, REP-018, MET-001..021: one wide row per run, stable column order,
+# no timestamp (the run timestamp stays in the run directory name and data_manifest.json).
+SIGNAL_PARAM_FIELDS = ("ma", "threshold_off", "threshold_on", "confirm_off", "confirm_on", "delay",
+                       "sell_fraction", "risk_off_action")
+TAX_ASSUMPTION_KEYS = (
+    "tax.dividend_tax_mode", "tax.dividend_estimate_policy", "tax.dividend_reinvest",
+    "tax.none.dividend_rate",
+    "tax.individual.dividend_rate", "tax.individual.capital_gains_rate",
+    "tax.individual.solidarity_rate", "tax.individual.solidarity_threshold_pln",
+    "tax.individual.external_solidarity_base_pln", "tax.individual.rf_interest_rate",
+    "tax.individual.loss_carryforward_years", "tax.individual.loss_offset_fraction",
+    "tax.individual.cost_basis",
+    "tax.foundation.dividend_rate", "tax.foundation.internal_trading_tax_rate",
+    "tax.foundation_15.distribution_rate", "tax.foundation_19.distribution_rate",
+    "tax.foundation.distribution_tax_base", "tax.foundation.tax_event",
+    "tax.foundation.rf_interest_rate", "tax.foundation.setup_cost_pln",
+    "tax.foundation.annual_admin_cost_pln", "tax.foundation.admin_cost_proration")
+YEAR_FIELDS = ("year", "year_return", "year_is_partial")
+
+SUMMARY_FIELDS = (
+    ["spec_version", "run_name", "tax_profile", "pre_tax_method",
+     "requested_start", "requested_end", "effective_first_week", "effective_last_week",
+     "inception_date", "elapsed_days", "weeks",
+     "initial_capital", "nav_start",
+     "final_wealth_pre_tax", "pre_terminal_nav", "after_tax_terminal_wealth",
+     "cagr", "after_tax_cagr", "real_cagr", "after_tax_real_cagr",
+     "volatility", "after_tax_volatility", "sharpe", "after_tax_sharpe",
+     "sortino", "after_tax_sortino", "max_drawdown", "after_tax_max_drawdown",
+     "calmar", "after_tax_calmar"]
+    + [f"{p}_{f}" for p in ("best", "worst") for f in YEAR_FIELDS]
+    + [f"after_tax_{p}_{f}" for p in ("best", "worst") for f in YEAR_FIELDS]
+    + ["trade_count", "turnover", "turnover_annualized",
+       "total_tax_paid", "dividend_tax_paid", "rf_interest_tax_paid", "capital_gains_tax_paid",
+       "solidarity_tax_paid", "foundation_distribution_tax_paid",
+       "terminal_trade_count", "terminal_traded_value", "terminal_transaction_costs",
+       "terminal_slippage", "terminal_liquidation_costs", "terminal_capital_gains_tax",
+       "terminal_solidarity_tax", "terminal_foundation_tax", "terminal_tax_total",
+       "transaction_cost_bps", "slippage_bps", "rebalance_mode", "rebalance_band_pp",
+       "sortino_mar_annual",
+       "cpi_label", "real_return_warning", "cpi_start_month", "cpi_end_month", "cpi_start",
+       "cpi_end", "cpi_start_imputed", "cpi_end_imputed", "cpi_note",
+       "as_of_date", "dropped_incomplete_weeks",
+       "common_data_start", "common_data_end", "range_truncations", "range_truncation_detail"]
+    + [f"target_{s}" for s in SLEEVES]
+    + [f"risk_{st}_share_{a}" for a in ("stocks", "gold", "btc") for st in ("on", "off")]
+    + [f"signal_{a}_{f}" for a in ("stocks", "gold", "btc") for f in SIGNAL_PARAM_FIELDS]
+    + ["applied_dividend_tax_rate", "applied_capital_gains_rate", "applied_solidarity_rate",
+       "applied_rf_interest_rate"]
+    + [k.replace(".", "_") for k in TAX_ASSUMPTION_KEYS])
+
+
+def _year_cells(prefix, y) -> dict:
+    return {f"{prefix}year": y.year if y else None, f"{prefix}year_return": y.ret if y else None,
+            f"{prefix}year_is_partial": y.is_partial if y else None}
+
+
+def summary_row(cfg, res) -> dict:
+    """Maps already computed results (metrics.RunMetrics, terminal settlement, tax state,
+    configuration) to the summary columns; no metric is computed here."""
+    m, t = res.metrics, res.terminal
+    tax_final = t.final_tax_state if t else None
+    params = res.tax_params
+    row = {
+        "spec_version": cfg.get("app.spec_version"), "run_name": cfg.get("report.run_name"),
+        "tax_profile": cfg.get("tax.profile"), "pre_tax_method": res.pre_tax.method,
+        "requested_start": cfg.start, "requested_end": cfg.end,
+        "effective_first_week": res.engine.weeks[0].week_key,
+        "effective_last_week": res.engine.weeks[-1].week_key,
+        "inception_date": res.first_week - dt.timedelta(days=7), "elapsed_days": m.elapsed_days,
+        "weeks": m.weeks, "initial_capital": float(cfg.get("portfolio.initial_capital_pln")),
+        "nav_start": m.nav_start,
+    }
+    for k in ("final_wealth_pre_tax", "pre_terminal_nav", "after_tax_terminal_wealth", "cagr",
+              "after_tax_cagr", "real_cagr", "after_tax_real_cagr", "volatility",
+              "after_tax_volatility", "sharpe", "after_tax_sharpe", "sortino", "after_tax_sortino",
+              "max_drawdown", "after_tax_max_drawdown", "calmar", "after_tax_calmar", "trade_count",
+              "turnover", "turnover_annualized", "terminal_trade_count", "terminal_traded_value"):
+        row[k] = getattr(m, k)
+    row.update(_year_cells("best_", m.best_year))
+    row.update(_year_cells("worst_", m.worst_year))
+    row.update(_year_cells("after_tax_best_", m.after_tax_best_year))
+    row.update(_year_cells("after_tax_worst_", m.after_tax_worst_year))
+    row.update({
+        "total_tax_paid": tax_final.total_tax_paid() if tax_final else 0.0,
+        "dividend_tax_paid": tax_final.dividend_tax_paid if tax_final else 0.0,
+        "rf_interest_tax_paid": tax_final.rf_tax_paid if tax_final else 0.0,
+        "capital_gains_tax_paid": tax_final.capital_gains_tax_paid if tax_final else 0.0,
+        "solidarity_tax_paid": tax_final.solidarity_tax_paid if tax_final else 0.0,
+        "foundation_distribution_tax_paid": 0.0,
+        "terminal_transaction_costs": t.terminal_transaction_costs if t else 0.0,
+        "terminal_slippage": t.terminal_slippage if t else 0.0,
+        "terminal_liquidation_costs": t.terminal_trading_costs if t else 0.0,
+        "terminal_capital_gains_tax": t.terminal_capital_gains_tax if t else 0.0,
+        "terminal_solidarity_tax": t.terminal_solidarity_tax if t else 0.0,
+        "terminal_foundation_tax": 0.0,
+        "terminal_tax_total": t.terminal_tax_total if t else 0.0,
+        "transaction_cost_bps": float(cfg.get("portfolio.transaction_cost_bps")),
+        "slippage_bps": float(cfg.get("portfolio.slippage_bps")),
+        "rebalance_mode": cfg.get("portfolio.rebalance"),
+        "rebalance_band_pp": cfg.get("portfolio.rebalance_band_pp"),
+        "sortino_mar_annual": float(cfg.get("metrics.sortino_mar_annual")),
+        "as_of_date": res.as_of, "dropped_incomplete_weeks": res.dropped_incomplete_weeks,
+        "common_data_start": res.common_range[0] if res.common_range else None,
+        "common_data_end": res.common_range[1] if res.common_range else None,
+        "range_truncations": len(res.truncations),
+        "range_truncation_detail": "|".join(f"{r}:{side}:{own}->{eff}"
+                                            for r, side, own, eff in res.truncations),
+    })
+    c = m.cpi
+    row.update({"cpi_label": c.label if c else cfg.get("cpi.label"),
+                "real_return_warning": c.warning if c else "real metrics not available (CPI)",
+                "cpi_start_month": c.start_month if c else None,
+                "cpi_end_month": c.end_month if c else None,
+                "cpi_start": c.cpi_start if c else None, "cpi_end": c.cpi_end if c else None,
+                "cpi_start_imputed": c.start_imputed if c else None,
+                "cpi_end_imputed": c.end_imputed if c else None,
+                "cpi_note": c.note if c else "CPI unavailable (REAL-003)"})
+    for s in SLEEVES:
+        row[f"target_{s}"] = res.targets[s]
+    for a, (on, off) in m.risk_state_shares.items():
+        row[f"risk_on_share_{a}"], row[f"risk_off_share_{a}"] = on, off
+    for a, p in res.inputs.params.items():
+        for f in SIGNAL_PARAM_FIELDS:
+            row[f"signal_{a}_{f}"] = getattr(p, f)
+    row.update({"applied_dividend_tax_rate": params.dividend_rate if params else 0.0,
+                "applied_capital_gains_rate": params.capital_gains_rate if params else 0.0,
+                "applied_solidarity_rate": params.solidarity_rate if params else 0.0,
+                "applied_rf_interest_rate": params.rf_interest_rate if params else 0.0})
+    for k in TAX_ASSUMPTION_KEYS:
+        row[k.replace(".", "_")] = cfg.get(k)
+    unknown = set(row) - set(SUMMARY_FIELDS)
+    if unknown:
+        raise KeyError(f"summary fields not declared: {sorted(unknown)}")
+    return row

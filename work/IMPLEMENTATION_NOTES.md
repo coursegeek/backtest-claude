@@ -1,18 +1,18 @@
 # IMPLEMENTATION_NOTES — Backtest V2 (clean-room)
 
-Stan: **foundation/core + core portfolio engine + rebalancing/sell_to_pay + podatki
-individual_pl + terminal settlement individual_pl** (sesja 6). Zaimplementowane: CLI i API
-importu, konfiguracja, modele, kalendarz, dostępność informacji, loadery z normalizacją
-kanoniczną, walidacja (semantyka luk Q-012), pipeline sygnałów, ledger, koszty transakcyjne,
-cost basis (lots), centralny tygodniowy engine PORT-011, rebalancing
+Stan: **foundation/core + core portfolio engine + rebalancing/sell_to_pay + podatki i
+terminal settlement individual_pl + pre-tax shadow run + metryki + summary.csv** (sesja 7).
+Zaimplementowane: CLI i API importu, konfiguracja, modele, kalendarz, dostępność informacji,
+loadery z normalizacją kanoniczną, walidacja (semantyka luk Q-012), pipeline sygnałów, ledger,
+koszty transakcyjne, cost basis (lots), centralny tygodniowy engine PORT-011, rebalancing
 `signal-only/weekly/monthly/quarterly/annually(yearly)/band`, sell_to_pay (TAX-006),
 finansowanie należności przy rebalancingu (TAX-007), moduł podatkowy `individual_pl`
-(`src/tax.py`) oraz terminal settlement `individual_pl` (`src/settlement.py`) jako osobna
-warstwa po tygodniowej ścieżce; komenda `run` dla `tax.profile` none i individual_pl.
-Nie ma jeszcze: profili fundacji i ich kosztów, terminal settlement dla profilu none (Q-032),
-pre-tax shadow run (Q-015 - silnik gotowy), metryk i `summary.csv`, scanów, optimize,
-tax-compare, walk-forward. Te tryby rozwiązują i walidują config, po czym kończą się kodem 3 z
-jawnym komunikatem (bez częściowych wyników).
+(`src/tax.py`), terminal settlement `individual_pl` (`src/settlement.py`), pre-tax shadow run
+(Q-015), moduł metryk (`src/metrics.py`) i `summary.csv`; komenda `run` dla `tax.profile` none
+i individual_pl.
+Nie ma jeszcze: profili fundacji i ich kosztów, rolling_metrics.csv (MET-022/023, SHOULD),
+scanów, optimize, tax-compare, walk-forward. Te tryby rozwiązują i walidują config, po czym
+kończą się kodem 3 z jawnym komunikatem (bez częściowych wyników).
 
 Źródło prawdy dla statusów: `compliance_matrix.csv`; pytania: `implementation_questions.csv`.
 
@@ -283,9 +283,9 @@ Warstwy: `models`, `errors`, `config`, `calendar`, `availability`, `data_loader`
 
 ## Terminal settlement individual_pl (sesja 6)
 
-43. **Adjudykacje**: Q-030, Q-051, Q-052 RESOLVED; Q-032 rozstrzygnięty dla individual_pl i
-    formalnie OPEN dla fundacji/profilu none (dla `tax.profile=none` terminal settlement nie
-    jest stosowany; `PortfolioRunResult.terminal is None`).
+43. **Adjudykacje**: Q-030, Q-051, Q-052 RESOLVED; Q-032 rozstrzygnięty dla individual_pl (a w
+    sesji 7 dla none: brak settlementu, `PortfolioRunResult.terminal is None`), OPEN tylko dla
+    fundacji.
 44. **Oddzielna warstwa** (`src/settlement.py`, PORT-014, IND-017): terminal settlement nie jest
     tygodniem backtestu. Engine kończy się `EngineResult.final_snapshot` - niemutowalnym
     `PortfolioSnapshot` (frozen Ledger, CostModel, krotki frozen Lot z `next_lot_id`, ceny
@@ -325,3 +325,60 @@ Warstwy: `models`, `errors`, `config`, `calendar`, `availability`, `data_loader`
     obcięty do 2026-06-26): kod 0; 443 wiersze tygodniowe, ostatni `nav_end` = pre_terminal_nav;
     trzy terminalne sprzedaże, rok 2026 rozliczony terminalnie. Tylko dowód mechaniki
     (Q-002/Q-004/Q-008).
+
+## Pre-tax shadow run, metryki i summary.csv (sesja 7)
+
+51. **Adjudykacje**: Q-040 i Q-045 RESOLVED; Q-032 dla `tax.profile=none`: brak terminal
+    liquidation i transakcji terminalnych, `pre_terminal_nav` = końcowy tygodniowy NAV, pola
+    terminalne 0, `after_tax_terminal_wealth = pre_terminal_nav`.
+52. **Shadow run (Q-015)** - `app.run_pre_tax`: dla individual_pl drugi przebieg centralnego
+    silnika na tym samym obiekcie `EngineInputs` (te same tygodnie, obiekty WeekMarket, sygnały,
+    parametry, targety, kapitał, koszty/slippage, konfiguracja rebalancingu, dywidendy, wynik
+    polityki estimate i missing) z nową instancją polityki rebalancingu i
+    `IndividualTaxHooks(params.zero_rates())`; dane nie są ponownie ładowane ani wyrównywane.
+    Księgowość dywidend/cost basis działa jak w runie faktycznym, ale wszystkie AmountsDue są 0,
+    więc nie ma sell_to_pay; ścieżki mogą się naturalnie rozjechać (podatki zmieniają NAV i
+    triggery band). Shadow nie ma terminal settlement: `final_wealth_pre_tax` = końcowy NAV
+    ścieżki shadow. Dla none pre-tax = przebieg faktyczny (`pre_tax_method=actual_run_no_taxes`);
+    test regresyjny potwierdza identyczność osobnego shadow. `summary.csv` i manifest zapisują
+    `pre_tax_method` (`shadow_zero_tax` | `actual_run_no_taxes`) i opis.
+53. **`src/metrics.py`** (czyste funkcje, bez I/O): `cagr`, `annualized_volatility`, `sharpe`,
+    `sortino`, `nav_path`, `drawdowns`, `max_drawdown`, `calmar`, `calendar_year_returns`,
+    `best_and_worst_year`, `trade_count`, `turnover`, `risk_state_shares`, `rf_after_tax`,
+    `real_cagr`, `cpi_window` i `compute_run_metrics` -> `RunMetrics`. Konwencje: CAGR
+    `(NAV_end/NAV_start) ** (365.2425/elapsed_days) - 1`, elapsed_days = ostatni zachowany
+    tydzień - inception (Q-014); zmienność = std(ddof=1)*sqrt(52); Sharpe = mean(R - RF) /
+    std(ddof=1) * sqrt(52) (pre-tax RF brutto, after-tax individual_pl RF netto `R - max(R,0)*
+    rf_interest_rate`, none RF); Sortino z MAR tygodniowym `(1+MAR)^(1/52)-1` i downside po
+    wszystkich tygodniach; drawdown na `[NAV_start] + nav_end` (running max z NAV_start), nigdy z
+    terminal settlement; Calmar = CAGR / maxDD pre-tax, after-tax Calmar = after-tax CAGR (z
+    podatkiem terminalnym) / maxDD ścieżki after-tax (bez terminalu) - asymetria wymagana przez
+    MET-010; lata wg Friday week_key (baza: NAV_start, potem NAV ostatniego tygodnia roku
+    poprzedniego), pierwszy rok niepełny, jeśli run zaczyna się po jego pierwszym piątku,
+    ostatni - jeśli kończy się przed ostatnim; trade_count i turnover (suma |gross| / średni
+    nav_end, plus turnover_annualized) z transakcji fazy weekly; udziały RISK_ON/OFF per aktywo.
+54. **Ścieżki**: pre-tax = shadow (`WeekRecord.portfolio_return` / `nav_end`), after-tax =
+    przebieg faktyczny (podatki bieżące, płatności roczne, koszty); trading metrics z przebiegu
+    faktycznego.
+55. **CPI (Q-045, REAL-001..005)**: CPI ładowany po runie i nigdy nie blokuje wyników nominalnych
+    (błąd => `real_cagr` puste + ostrzeżenie `cpi_unavailable`). CPI_start = miesiąc
+    inception_date, CPI_end = miesiąc ostatniego zachowanego piątku; `cpi.mapping=
+    previous_available` bierze ostatni wcześniejszy miesiąc (flaga `cpi_*_imputed`, ostrzeżenie
+    `cpi_imputed_for_metrics`), znana luka 2025-10 jest wypełniana już przez loader. Etykieta z
+    `cpi.label`; przy domyślnej `US CPI-U / CPIAUCNS` ostrzeżenie dokładnie `Real returns
+    deflated by US CPI; not Polish CPI`, dla innej etykiety `Real returns deflated by <label>`.
+56. **summary.csv** (REP-002/012/017/018, NORM-011): jeden szeroki wiersz, kolumny
+    `reporting.SUMMARY_FIELDS` w stałej kolejności, bez timestampu (jest w katalogu i manifeście)
+    - identyczne runy dają identyczne bajty. Zawiera: identyfikację runu i zakres (żądany,
+    efektywny, inception, elapsed_days, tygodnie, wspólny zakres danych i każde obcięcie),
+    majątek (pre-tax, pre_terminal_nav, after-tax), metryki pre-/after-tax, lata best/worst z
+    flagą partial, trade_count, turnover, podatki per typ (CG i danina łącznie roczne +
+    terminalne), rozbicie terminalne (dla none zera), koszty bps, tryb rebalancingu, CPI, as_of i
+    porzucone tygodnie, targety, udziały RISK_ON/OFF per aktywo, parametry sygnału per aktywne
+    aktywo, stawki zastosowane w runie i wszystkie założenia podatkowe/kosztowe configu (w tym
+    parametry scenariusza fundacji - tylko jako założenia; profile fundacji nie są
+    zaimplementowane). `reporting.summary_row` tylko mapuje wyniki, niczego nie liczy.
+57. **Przykład** (staged, S07 band 1 pp, 10+5 bps, 2018-01-01..2026-07-31): none - CAGR =
+    after-tax CAGR 0.1753, maxDD 0.2538, 540 transakcji; individual_pl (zakres do 2026-06-26 przez
+    plik dywidend) - CAGR pre-tax 0.1751, after-tax 0.1469, maxDD pre 0.2538 / after 0.2978,
+    podatki 516 673 w tym terminalny CG 129 401. Tylko dowód mechaniki (Q-002/Q-004/Q-008).

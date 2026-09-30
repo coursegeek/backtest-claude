@@ -161,3 +161,100 @@ def test_terminal_settlement_breakout(taxed):
     assert [t["asset"] for t in term] == ["stocks", "gold", "btc"]
     assert {r["phase"] for r in read("realizations.csv")} == {"weekly", "terminal"}
     assert {p["phase"] for p in read("payments.csv") if p["context"] == "terminal_settlement"} == {"terminal"}
+
+
+def _summary(out):
+    rows = list(csv.DictReader((out / "summary.csv").open(encoding="utf-8")))
+    assert len(rows) == 1                                       # one wide row per run
+    return rows[0]
+
+
+def test_summary_schema(taxed):
+    """REP-002, REP-017, REP-018: summary.csv has the stable column list, one row, the
+    parameters, metrics, terminal breakout, as_of_date and dropped incomplete weeks."""
+    from src.reporting import SUMMARY_FIELDS
+    res, read = taxed
+    header = (res.output_dir / "summary.csv").read_text(encoding="utf-8").splitlines()[0].split(",")
+    assert header == list(SUMMARY_FIELDS)
+    row = _summary(res.output_dir)
+    for k in ("spec_version", "run_name", "tax_profile", "requested_start", "requested_end",
+              "effective_first_week", "effective_last_week", "inception_date", "elapsed_days",
+              "weeks", "initial_capital", "nav_start", "final_wealth_pre_tax", "pre_terminal_nav",
+              "after_tax_terminal_wealth", "cagr", "after_tax_cagr", "real_cagr", "volatility",
+              "sharpe", "after_tax_sharpe", "sortino", "max_drawdown", "calmar", "after_tax_calmar",
+              "best_year", "worst_year", "trade_count", "turnover", "total_tax_paid",
+              "terminal_liquidation_costs", "terminal_capital_gains_tax",
+              "terminal_solidarity_tax", "terminal_foundation_tax", "as_of_date",
+              "dropped_incomplete_weeks", "target_stocks", "risk_on_share_stocks",
+              "signal_stocks_ma", "cpi_label", "real_return_warning"):
+        assert row[k] != "", k
+    assert (row["spec_version"], row["tax_profile"], row["pre_tax_method"]) == (
+        "3.1", "individual_pl", "shadow_zero_tax")
+    assert row["as_of_date"] == "2026-09-29" and row["requested_start"] == "2018-01-01"
+    assert float(row["pre_terminal_nav"]) == float(read("weekly_portfolio.csv")[-1]["nav_end"])
+    doc = json.loads((res.output_dir / "terminal_settlement.json").read_text())
+    for k in ("pre_terminal_nav", "terminal_liquidation_costs", "terminal_capital_gains_tax",
+              "terminal_solidarity_tax", "after_tax_terminal_wealth", "terminal_tax_total"):
+        assert float(row[k]) == doc[k], k
+    assert float(row["terminal_foundation_tax"]) == 0.0
+    assert int(row["terminal_trade_count"]) == 3 and int(row["trade_count"]) == len(res.engine.trades)
+    m = json.loads((res.output_dir / "data_manifest.json").read_text())
+    assert m["pre_tax_method"] == "shadow_zero_tax" and "same EngineInputs" in m["pre_tax_note"]
+    assert "run_timestamp" not in row
+
+
+def test_summary_lists_all_tax_rates_and_bases(taxed):
+    """REP-012, META-006: the summary shows every tax and cost assumption of the configuration
+    (individual, none and the foundation scenario parameters) and the rates applied in this
+    run, as user scenario parameters."""
+    res, _ = taxed
+    row = _summary(res.output_dir)
+    expected = {"tax_individual_dividend_rate": 0.19, "tax_individual_capital_gains_rate": 0.19,
+                "tax_individual_solidarity_rate": 0.04,
+                "tax_individual_solidarity_threshold_pln": 1_000_000.0,
+                "tax_individual_rf_interest_rate": 0.19, "tax_foundation_dividend_rate": 0.15,
+                "tax_foundation_15_distribution_rate": 0.15,
+                "tax_foundation_19_distribution_rate": 0.19,
+                "tax_foundation_setup_cost_pln": 40_000.0,
+                "tax_foundation_annual_admin_cost_pln": 40_000.0,
+                "applied_dividend_tax_rate": 0.19, "applied_capital_gains_rate": 0.19,
+                "applied_solidarity_rate": 0.04, "applied_rf_interest_rate": 0.19,
+                "transaction_cost_bps": 10.0, "slippage_bps": 0.0}
+    for k, v in expected.items():
+        assert float(row[k]) == v, k
+    assert row["tax_individual_cost_basis"] == "FIFO" and row["tax_dividend_tax_mode"] == "smoothed_weekly"
+
+
+def test_summary_none_profile(tmp_path):
+    """Q-032 (none), REP-017: no terminal settlement; terminal fields 0 and
+    after_tax_terminal_wealth = pre_terminal_nav = final_wealth_pre_tax; all tax fields 0;
+    pre-tax and after-tax metrics identical."""
+    layer = json.loads(json.dumps(RUN))
+    layer["tax"] = {"profile": "none"}
+    layer["report"] = {"output_dir": str(tmp_path), "run_name": "none"}
+    res = run_portfolio(ResolvedConfig("run", cli_layer=layer))
+    row = _summary(res.output_dir)
+    assert row["pre_tax_method"] == "actual_run_no_taxes"
+    assert row["after_tax_terminal_wealth"] == row["pre_terminal_nav"] == row["final_wealth_pre_tax"]
+    for k in ("terminal_liquidation_costs", "terminal_capital_gains_tax", "terminal_solidarity_tax",
+              "terminal_foundation_tax", "terminal_tax_total", "total_tax_paid", "dividend_tax_paid",
+              "capital_gains_tax_paid", "solidarity_tax_paid", "applied_capital_gains_rate"):
+        assert float(row[k]) == 0.0, k
+    assert row["terminal_trade_count"] == "0" and not (res.output_dir / "terminal_settlement.json").exists()
+    for k in ("cagr", "volatility", "sharpe", "sortino", "max_drawdown", "calmar", "real_cagr"):
+        assert row[k] == row[f"after_tax_{k}"], k
+    assert not [t for t in read_rows(res.output_dir, "trades.csv") if t["phase"] == "terminal"]
+
+
+def read_rows(out, name):
+    return list(csv.DictReader((out / name).open(encoding="utf-8")))
+
+
+def test_summary_reproducible(taxed, tmp_path):
+    """REPRO: identical config, as_of and inputs give a byte-identical summary.csv."""
+    res, _ = taxed
+    layer = json.loads(json.dumps(RUN))
+    layer["report"] = {"output_dir": str(tmp_path), "run_name": "tax"}
+    again = run_portfolio(ResolvedConfig("run", cli_layer=layer)).output_dir
+    assert (res.output_dir / "summary.csv").read_bytes() == (again / "summary.csv").read_bytes()
+    assert res.output_dir != again

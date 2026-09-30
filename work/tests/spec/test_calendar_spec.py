@@ -43,6 +43,25 @@ def test_common_range_truncation_reported():
                      ("a", "end", D("2020-12-25"), D("2018-12-28"))]
 
 
+def test_common_range_truncation_in_summary(tmp_path):
+    """TEST-022 (summary part) / NORM-011: a portfolio run reports the common data range and
+    every truncation in summary.csv (and as validation warnings)."""
+    import csv
+    from src.app import run_portfolio
+    cfg = ResolvedConfig("run", cli_layer={
+        "allocation": {"targets": "stocks=0.6,gold=0.2,btc=0.2"},
+        "run": {"start": "2018-01-01", "end": "2018-12-31", "as_of_date": "2026-09-29"},
+        "report": {"output_dir": str(tmp_path), "run_name": "trunc"}})
+    res = run_portfolio(cfg)
+    row = next(csv.DictReader((res.output_dir / "summary.csv").open(encoding="utf-8")))
+    assert row["common_data_start"] == "2011-07-15"               # limited by BTC
+    detail = row["range_truncation_detail"].split("|")
+    assert int(row["range_truncations"]) == len(detail) == len(res.truncations) > 0
+    assert "gold:start:1970-01-16->2011-07-15" in detail
+    warned = [i for i in res.report.issues if i.code == "range_truncated"]
+    assert len(warned) == len(detail)
+
+
 def test_signal_only_1920_full_backtest_needs_returns():
     """TEST-023 / NORM-012: signal-only analysis of US stocks works from 1920 history even
     though Fama-French returns start in July 1926."""

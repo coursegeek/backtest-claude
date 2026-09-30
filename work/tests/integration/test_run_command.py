@@ -51,7 +51,8 @@ def test_run_signal_only_staged_mechanics(tmp_path):
     assert abs(math.fsum(float(last[c]) for c in comps) - float(last["nav_end"])) < 1e-6
     assert float(last["target_stocks"]) == 0.6 and float(last["weight_end_stocks"]) != 0.6
     m = json.loads((out / "data_manifest.json").read_text())
-    assert m["run_calendar_weeks"] == 448 and "summary.csv (metrics)" in m["not_implemented_outputs"]
+    assert m["run_calendar_weeks"] == 448 and m["pre_tax_method"] == "actual_run_no_taxes"
+    assert (out / "summary.csv").is_file()
     assert "range_truncated" in (out / "validation_report.csv").read_text()
 
 

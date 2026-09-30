@@ -35,7 +35,7 @@ Core engine nie został napisany; powstały wyłącznie narzędzia audytowe, rap
 | MINOR | 23 (+ Q-050, Q-051, Q-052) |
 | MUST zmapowane bez blokera (`MAPPED`) | 340 w audycie → 347 po adjudykacji |
 | MUST zablokowane decyzją (`BLOCKED`) | 12 w audycie → 5 po adjudykacji (tylko DATA BLOCKER) |
-| MUST `PASS` | 0 w audycie; 139 po sesji 2; 165 po sesji 3; 177 po sesji 4; 217 po sesji 5; 225 po sesji 6 (sekcja 13) |
+| MUST `PASS` | 0 w audycie; 139 po sesji 2; 165 po sesji 3; 177 po sesji 4; 217 po sesji 5; 225 po sesji 6; 262 po sesji 7 (sekcja 13) |
 | SHOULD proponowane do odroczenia | 1 (ERR-007 cache) |
 | Kontrole danych | 58: 27 PASS, 12 FAIL, 14 WARN, 5 INFO |
 | Scenariusze AB + przykłady CLI | 20: 10 wykonalnych, 10 wymaga decyzji |
@@ -224,7 +224,9 @@ jawne ostrzeżenia lub czytelne błędy zamiast cichych założeń.
 | Q-030 limit offsetu strat (sesja 6) | RESOLVED | `eligible_offset = min(Σ pozostałych sald niewygasłych bucketów * loss_offset_fraction, dodatni zysk roku)`; bucket z Y używalny w Y+1..Y+N, oldest-first. |
 | Q-051 external base daniny (sesja 6) | RESOLVED | Dosłowny model IND-002/004/005: gdy sama external base przekracza próg, danina od nadwyżki także przy zerowym zysku (założenie modelu). |
 | Q-052 polityki estimate (sesja 6) | RESOLVED | allow_with_warning (estimate + ostrzeżenie + status), actual_only (estimate usuwane ze źródła, decyduje alignment/missing policy), error_on_estimate (błąd). |
-| Q-032 terminal settlement (sesja 6, częściowo) | OPEN | individual_pl rozstrzygnięty: likwidacja 100% ryzykownych aktywów z kosztami → realizacje do roku finalnego → netting + carry-forward → CG → danina → after_tax_terminal_wealth; nie jest tygodniem backtestu. Fundacja i profil none - otwarte. |
+| Q-032 terminal settlement (sesje 6-7, częściowo) | OPEN | individual_pl: likwidacja 100% ryzykownych aktywów z kosztami → realizacje do roku finalnego → netting + carry-forward → CG → danina → after_tax_terminal_wealth; nie jest tygodniem backtestu. none (sesja 7): brak settlementu, pola terminalne 0, after_tax_terminal_wealth = pre_terminal_nav. Otwarte tylko dla fundacji. |
+| Q-040 konwencje metryk (sesja 7) | RESOLVED | Drawdown od NAV_start bez terminalu; lata wg Friday key z flagą partial; trade_count i turnover tylko transakcje weekly (terminal osobno); udziały RISK_ON/OFF per aktywo; Sharpe after-tax z RF netto. |
+| Q-045 CPI / real CAGR (sesja 7) | RESOLVED | CPI_start = miesiąc inception, CPI_end = miesiąc ostatniego zachowanego tygodnia (previous_available z flagą); real_cagr pre-tax wymagany, after_tax_real_cagr dodatkowo; dokładne ostrzeżenie US CPI. |
 | Q-046 sell_to_pay (sesja 4) | RESOLVED | Wartości po kroku 1; A rf_base → B rezerwy pro rata → C stocks/gold/btc pro rata do wartości rynkowych z gross-up `N/(1-c)` ograniczonym do pozycji; każda sprzedaż aktualizuje cost basis i realizację; stan sygnału bez zmian; insolvency, gdy wartość likwidacyjna netto < należność; wynik niezależny od kolejności kluczy. |
 
 Wiersze MUST nadal `BLOCKED` (dane niekanoniczne): SEM-001, SEM-003, SCHEMA-005, SEM-007, TEST-038.
@@ -263,8 +265,15 @@ Wiersze MUST nadal `BLOCKED` (dane niekanoniczne): SEM-001, SEM-003, SCHEMA-005,
   `tax_state.json` z `before_terminal`/`after_terminal`. weekly_portfolio.csv kończy się
   `pre_terminal_nav`. Q-030, Q-051, Q-052 RESOLVED; Q-032 rozstrzygnięty tylko dla individual_pl.
 
-Stan macierzy: MUST — 225 `PASS`, 22 `IN_PROGRESS`, 100 `MAPPED`, 5 `BLOCKED` (DATA BLOCKER),
-0 `FAIL`; SHOULD — 11 `PASS`. Testy: `python -m pytest work` (wszystkie przechodzą). Żaden wiersz
+* Sesja 7: pre-tax shadow run (Q-015: drugi przebieg silnika na identycznym obiekcie
+  `EngineInputs` z `TaxParams.zero_rates()` dla individual_pl; dla none przebieg faktyczny),
+  czysty moduł `src/metrics.py` (CAGR, zmienność, Sharpe, Sortino, max drawdown, Calmar, lata
+  kalendarzowe, turnover, trade count, udziały RISK_ON/OFF, real CAGR z oknem CPI) i
+  `summary.csv` (jeden szeroki wiersz, stabilna kolejność kolumn, bez timestampu). Q-040 i Q-045
+  RESOLVED; Q-032 rozstrzygnięty dla none (otwarty tylko dla fundacji).
+
+Stan macierzy: MUST — 262 `PASS`, 18 `IN_PROGRESS`, 67 `MAPPED`, 5 `BLOCKED` (DATA BLOCKER),
+0 `FAIL`; SHOULD — 13 `PASS`. Testy: `python -m pytest work` (wszystkie przechodzą). Żaden wiersz
 zablokowany przez Q-002/Q-004/Q-008 nie został oznaczony `PASS` na podstawie staged plików;
 dowody dla LBMA, segmentów SEM-001 i kanonicznego SCHEMA-005 pochodzą z syntetycznych fixture'ów.
 
@@ -276,9 +285,9 @@ questions_total=52
 blockers=6
 major=20
 minor=26
-must_mapped=100
+must_mapped=67
 must_blocked=5
-must_pass=225
+must_pass=262
 should_proposed_deferral=1
 input_checks=58
 checks_fail=12
@@ -290,9 +299,9 @@ scenarios_feasible=10
 scenarios_needs_decision=10
 blocker_ids=Q-002,Q-004,Q-005,Q-008,Q-012,Q-020
 data_blocker_ids=Q-002,Q-004,Q-008
-resolved_ids=Q-005,Q-006,Q-012,Q-014,Q-015,Q-016,Q-017,Q-018,Q-019,Q-020,Q-029,Q-030,Q-035,Q-039,Q-046,Q-049,Q-050,Q-051,Q-052
-open_questions=30
+resolved_ids=Q-005,Q-006,Q-012,Q-014,Q-015,Q-016,Q-017,Q-018,Q-019,Q-020,Q-029,Q-030,Q-035,Q-039,Q-040,Q-045,Q-046,Q-049,Q-050,Q-051,Q-052
+open_questions=28
 must_fail=0
-must_in_progress=22
-should_pass=11
+must_in_progress=18
+should_pass=13
 -->

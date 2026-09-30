@@ -22,16 +22,18 @@ from .calendar import (common_range, elapsed_days, first_key_on_or_after, first_
                        inception_date, last_key_on_or_before, last_return_week)
 from .config import ResolvedConfig
 from .data_loader import load_dividend_cash, load_role
-from .errors import (ConfigError, DataFileNotFound, DataValidationError, DividendModeError,
-                     NotImplementedCommand)
+from .errors import (BacktestError, ConfigError, DataFileNotFound, DataValidationError,
+                     DividendModeError, NotImplementedCommand)
 from .manifest import build_manifest, run_timestamp
 from .costs import CostModel
 from .engine import ComposedHooks, EngineInputs, WeekMarket, run_engine
 from .rebalancing import hooks_from_config
+from .metrics import PathSeries, RunMetrics, compute_run_metrics, cpi_window
 from .settlement import TerminalSettlementResult, settle_terminal
 from .tax import IndividualTaxHooks, TaxState, tax_hooks_from_config
 from .models import RISKY_ASSETS, Severity, ValidationIssue, canonical_assets
-from .reporting import (DIVIDEND_FIELDS, NORMALIZED_FIELDS, PAYMENT_FIELDS, REALIZATION_FIELDS,
+from .reporting import (SUMMARY_FIELDS, summary_row,
+                        DIVIDEND_FIELDS, NORMALIZED_FIELDS, PAYMENT_FIELDS, REALIZATION_FIELDS,
                         REBALANCE_FIELDS, SIGNAL_FIELDS, TAX_EVENT_FIELDS, TRADE_FIELDS,
                         TRANSFER_FIELDS, VALIDATION_FIELDS, dividend_rows, rebalance_rows,
                         realization_rows, record_rows, tax_event_rows, terminal_settlement_doc,
@@ -148,9 +150,27 @@ class PortfolioRunResult:
     output_dir: Optional[Path] = None
     normalized: tuple = ()
     dividend_mode: str = "none"
+    common_range: tuple = ()                        # NORM-011 (effective_start, effective_end)
+    truncations: tuple = ()                         # (role, side, own bound, effective bound)
     tax_state: Optional[TaxState] = None            # weekly (pre-terminal) tax state
     tax_params: Optional[object] = None
     terminal: Optional[TerminalSettlementResult] = None   # separate from the weekly path
+    pre_tax: Optional["PreTaxRun"] = None           # Q-015 pre-tax path (shadow or actual)
+    metrics: Optional[RunMetrics] = None
+    inputs: Optional[EngineInputs] = None
+    cpi_series: Optional[object] = None
+
+
+@dataclass(frozen=True)
+class PreTaxRun:
+    """Q-015: pre-tax path of a run. individual_pl: a second central-engine run on the
+    identical EngineInputs object (same weeks, WeekMarket objects, signals, targets, capital,
+    costs, rebalancing configuration, dividend data) with TaxParams.zero_rates(); only the
+    taxation policy differs. tax.profile=none: the actual run itself (no taxes exist)."""
+    method: str                 # shadow_zero_tax | actual_run_no_taxes
+    engine: object
+    inputs: EngineInputs
+    note: str
 
 
 def check_supported_run(cfg: ResolvedConfig) -> None:
@@ -346,7 +366,8 @@ def build_run(cfg: ResolvedConfig):
                         for w in sorted(div) if w in market)
     ctx = dict(report=report, provenances=provs, first_week=first,
                last_week=last, as_of=as_of, targets=targets, dropped_incomplete_weeks=dropped,
-               calendar=cal, normalized=normalized, dividend_mode=div_mode)
+               calendar=cal, normalized=normalized, dividend_mode=div_mode,
+               common_range=(start, end), truncations=tuple(truncations))
     return inputs, ctx
 
 
@@ -366,6 +387,40 @@ def find_tax_hooks(hooks) -> Optional[IndividualTaxHooks]:
     return None
 
 
+def run_pre_tax(cfg: ResolvedConfig, inputs: EngineInputs, actual, tax) -> PreTaxRun:
+    """Q-015 (RESOLVED): never rebuilds data or calendars - reuses ``inputs`` as is."""
+    if tax is None:
+        return PreTaxRun("actual_run_no_taxes", actual, inputs,
+                         "tax.profile=none: the actual weekly run has no taxes and is the "
+                         "pre-tax path")
+    shadow = ComposedHooks(hooks_from_config(cfg), IndividualTaxHooks(tax.params.zero_rates()))
+    return PreTaxRun("shadow_zero_tax", run_engine(inputs, shadow), inputs,
+                     "same EngineInputs object as the actual run (weeks, markets, signals, "
+                     "targets, capital, rebalancing, dividend data); every tax rate set to 0; "
+                     "transaction costs and slippage kept; no terminal settlement")
+
+
+def load_cpi_window(cfg: ResolvedConfig, inception, last_week, report):
+    """REAL-001..004, Q-045: CPI of the inception month and of the last retained week's month;
+    CPI problems never block the nominal run (REAL-003)."""
+    try:
+        cpi = load_role(cfg, "cpi")
+    except BacktestError as e:
+        report.add(ValidationIssue(Severity.WARNING, "cpi_unavailable", "cpi",
+                                   f"real metrics not computed: {e}", None, "REAL-003"))
+        return None, None
+    report.add_provenance(cpi.provenance)
+    window = cpi_window(cpi, inception, last_week, cfg.get("cpi.mapping"), cfg.get("cpi.label"))
+    if window.cpi_start is None or window.cpi_end is None:
+        report.add(ValidationIssue(Severity.WARNING, "cpi_unavailable", "cpi",
+                                   f"real metrics not computed: {window.note}", None, "REAL-003"))
+    elif window.start_imputed or window.end_imputed:
+        report.add(ValidationIssue(Severity.WARNING, "cpi_imputed_for_metrics", "cpi",
+                                   f"CPI previous_available used for real metrics: {window.note}",
+                                   None, "REAL-002;NORM-015"))
+    return cpi, window
+
+
 def run_portfolio(cfg: ResolvedConfig, write: bool = True, hooks=None) -> PortfolioRunResult:
     inputs, ctx = build_run(cfg)
     hooks = hooks if hooks is not None else build_hooks(cfg)
@@ -373,10 +428,27 @@ def run_portfolio(cfg: ResolvedConfig, write: bool = True, hooks=None) -> Portfo
     ctx["report"].extend(result.issues)
     tax = find_tax_hooks(hooks)
     # IND-016/IND-020: terminal settlement on copies of the final state (never a weekly record);
-    # for tax.profile=none it is not applied (Q-032 open for the other profiles)
+    # tax.profile=none has no terminal settlement (Q-032: only foundations remain open)
     terminal = settle_terminal(result.final_snapshot, tax.params, tax.state) if tax else None
+    pre_tax = run_pre_tax(cfg, inputs, result, tax)
+    first, last = ctx["first_week"], result.weeks[-1].week_key
+    cpi, window = load_cpi_window(cfg, inception_date(first), last, ctx["report"])
+    if cpi is not None:
+        ctx["provenances"] += (cpi.provenance,)
+    metrics = compute_run_metrics(
+        pre=PathSeries.from_engine(pre_tax.engine), after=PathSeries.from_engine(result),
+        elapsed_days=elapsed_days(first, last), rf_returns=[w.market.rf_return for w in result.weeks],
+        rf_after_tax_rate=tax.params.rf_interest_rate if tax else 0.0,
+        pre_terminal_nav=result.final_ledger.nav,
+        after_tax_terminal_wealth=(terminal.after_tax_terminal_wealth if terminal
+                                   else result.final_ledger.nav),
+        trades=result.trades, terminal_trades=terminal.liquidation_trades if terminal else (),
+        week_states=[w.effective_states for w in result.weeks],
+        assets=canonical_assets(inputs.params), mar_annual=float(cfg.get("metrics.sortino_mar_annual")),
+        cpi=window)
     out = PortfolioRunResult(engine=result, **ctx, tax_state=tax.state if tax else None,
-                             tax_params=tax.params if tax else None, terminal=terminal)
+                             tax_params=tax.params if tax else None, terminal=terminal,
+                             pre_tax=pre_tax, metrics=metrics, inputs=inputs, cpi_series=cpi)
     if write:
         out.output_dir = write_portfolio_outputs(cfg, out)
     return out
@@ -421,6 +493,7 @@ def write_portfolio_outputs(cfg: ResolvedConfig, res: PortfolioRunResult) -> Pat
                                 "year still open); after_terminal = after terminal liquidation "
                                 "and final-year settlement"})
     write_json(out / "tax_state.json", tax_doc)
+    write_csv(out / "summary.csv", SUMMARY_FIELDS, [summary_row(cfg, res)])
     manifest = build_manifest(res.provenances, res.as_of, ts, cfg.command)
     manifest.update({
         "dropped_incomplete_weeks": res.dropped_incomplete_weeks,
@@ -440,8 +513,11 @@ def write_portfolio_outputs(cfg: ResolvedConfig, res: PortfolioRunResult) -> Pat
                           "tax_events.csv", "realizations.csv", "dividend_reinvestments.csv",
                           "tax_state.json"] + (["terminal_settlement.json"] if t else []),
         "terminal_settlement": ("individual_pl: separate from the weekly path" if t else
-                                "not applied (tax.profile=none; Q-032 open for other profiles)"),
-        "not_implemented_outputs": ["summary.csv (metrics)"],
+                                "none: no terminal settlement (after_tax_terminal_wealth = "
+                                "pre_terminal_nav, Q-032)"),
+        "pre_tax_method": res.pre_tax.method,
+        "pre_tax_note": res.pre_tax.note,
+        "not_implemented_outputs": ["rolling_metrics.csv (MET-022/023, SHOULD)"],
     })
     write_json(out / "data_manifest.json", manifest)
     return out
