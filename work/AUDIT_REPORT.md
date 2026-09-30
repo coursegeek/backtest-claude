@@ -35,7 +35,7 @@ Core engine nie został napisany; powstały wyłącznie narzędzia audytowe, rap
 | MINOR | 23 (+ Q-050, Q-051, Q-052) |
 | MUST zmapowane bez blokera (`MAPPED`) | 340 w audycie → 347 po adjudykacji |
 | MUST zablokowane decyzją (`BLOCKED`) | 12 w audycie → 5 po adjudykacji (tylko DATA BLOCKER) |
-| MUST `PASS` | 0 w audycie; 139 po sesji 2; 165 po sesji 3; 177 po sesji 4; 217 po sesji 5 (sekcja 13) |
+| MUST `PASS` | 0 w audycie; 139 po sesji 2; 165 po sesji 3; 177 po sesji 4; 217 po sesji 5; 225 po sesji 6 (sekcja 13) |
 | SHOULD proponowane do odroczenia | 1 (ERR-007 cache) |
 | Kontrole danych | 58: 27 PASS, 12 FAIL, 14 WARN, 5 INFO |
 | Scenariusze AB + przykłady CLI | 20: 10 wykonalnych, 10 wymaga decyzji |
@@ -221,6 +221,10 @@ jawne ostrzeżenia lub czytelne błędy zamiast cichych założeń.
 | Q-018 solver rebalancingu (sesja 5) | RESOLVED | Akceptacja istniejącego cost-aware solvera końcowego NAV (TEST-054). |
 | Q-029 rok podatkowy (sesja 5) | RESOLVED | Rok = rok Friday week_key; transakcje kroku 1 pierwszego tygodnia Y+1 należą do Y+1; zobowiązanie za Y ustalane w kroku 2 pierwszego zachowanego tygodnia Y+1. |
 | Q-035 tax_events (sesja 5) | RESOLVED | Pola week_key, event_type, category (tax/cost), settlement (weekly/annual/terminal), tax_year, gross_base, taxable_base, rate, amount, notes; total_tax_paid = suma category=tax; koszty transakcyjne tylko w trades.csv. |
+| Q-030 limit offsetu strat (sesja 6) | RESOLVED | `eligible_offset = min(Σ pozostałych sald niewygasłych bucketów * loss_offset_fraction, dodatni zysk roku)`; bucket z Y używalny w Y+1..Y+N, oldest-first. |
+| Q-051 external base daniny (sesja 6) | RESOLVED | Dosłowny model IND-002/004/005: gdy sama external base przekracza próg, danina od nadwyżki także przy zerowym zysku (założenie modelu). |
+| Q-052 polityki estimate (sesja 6) | RESOLVED | allow_with_warning (estimate + ostrzeżenie + status), actual_only (estimate usuwane ze źródła, decyduje alignment/missing policy), error_on_estimate (błąd). |
+| Q-032 terminal settlement (sesja 6, częściowo) | OPEN | individual_pl rozstrzygnięty: likwidacja 100% ryzykownych aktywów z kosztami → realizacje do roku finalnego → netting + carry-forward → CG → danina → after_tax_terminal_wealth; nie jest tygodniem backtestu. Fundacja i profil none - otwarte. |
 | Q-046 sell_to_pay (sesja 4) | RESOLVED | Wartości po kroku 1; A rf_base → B rezerwy pro rata → C stocks/gold/btc pro rata do wartości rynkowych z gross-up `N/(1-c)` ograniczonym do pozycji; każda sprzedaż aktualizuje cost basis i realizację; stan sygnału bez zmian; insolvency, gdy wartość likwidacyjna netto < należność; wynik niezależny od kolejności kluczy. |
 
 Wiersze MUST nadal `BLOCKED` (dane niekanoniczne): SEM-001, SEM-003, SCHEMA-005, SEM-007, TEST-038.
@@ -250,7 +254,16 @@ Wiersze MUST nadal `BLOCKED` (dane niekanoniczne): SEM-001, SEM-003, SCHEMA-005,
   settlement (ostatni rok podatkowy pozostaje otwarty), bez fundacji, metryk i summary.csv.
   Nowe pytania: Q-051 (external base daniny powyżej progu), Q-052 (semantyka polityk DIV-011).
 
-Stan macierzy: MUST — 217 `PASS`, 23 `IN_PROGRESS`, 107 `MAPPED`, 5 `BLOCKED` (DATA BLOCKER),
+* Sesja 6: terminal settlement `individual_pl` (`src/settlement.py`) jako warstwa całkowicie
+  oddzielna od tygodniowej ścieżki NAV: niemutowalny `PortfolioSnapshot` (ledger, loty cost
+  basis, ceny jednostek, koszty) z `WorkingPortfolio.snapshot()/from_snapshot()`, likwidacja
+  100% stocks/gold/btc (`terminal_liquidation`, `phase=terminal`) z kosztami, rozliczenie roku
+  finalnego tą samą funkcją `close_tax_year()` (settlement=terminal), konsolidacja rezerw RF i
+  zapłata podatków z gotówki terminalnej, `TerminalSettlementResult`, `terminal_settlement.json`,
+  `tax_state.json` z `before_terminal`/`after_terminal`. weekly_portfolio.csv kończy się
+  `pre_terminal_nav`. Q-030, Q-051, Q-052 RESOLVED; Q-032 rozstrzygnięty tylko dla individual_pl.
+
+Stan macierzy: MUST — 225 `PASS`, 22 `IN_PROGRESS`, 100 `MAPPED`, 5 `BLOCKED` (DATA BLOCKER),
 0 `FAIL`; SHOULD — 11 `PASS`. Testy: `python -m pytest work` (wszystkie przechodzą). Żaden wiersz
 zablokowany przez Q-002/Q-004/Q-008 nie został oznaczony `PASS` na podstawie staged plików;
 dowody dla LBMA, segmentów SEM-001 i kanonicznego SCHEMA-005 pochodzą z syntetycznych fixture'ów.
@@ -263,9 +276,9 @@ questions_total=52
 blockers=6
 major=20
 minor=26
-must_mapped=107
+must_mapped=100
 must_blocked=5
-must_pass=217
+must_pass=225
 should_proposed_deferral=1
 input_checks=58
 checks_fail=12
@@ -277,9 +290,9 @@ scenarios_feasible=10
 scenarios_needs_decision=10
 blocker_ids=Q-002,Q-004,Q-005,Q-008,Q-012,Q-020
 data_blocker_ids=Q-002,Q-004,Q-008
-resolved_ids=Q-005,Q-006,Q-012,Q-014,Q-015,Q-016,Q-017,Q-018,Q-019,Q-020,Q-029,Q-035,Q-039,Q-046,Q-049,Q-050
-open_questions=33
+resolved_ids=Q-005,Q-006,Q-012,Q-014,Q-015,Q-016,Q-017,Q-018,Q-019,Q-020,Q-029,Q-030,Q-035,Q-039,Q-046,Q-049,Q-050,Q-051,Q-052
+open_questions=30
 must_fail=0
-must_in_progress=23
+must_in_progress=22
 should_pass=11
 -->

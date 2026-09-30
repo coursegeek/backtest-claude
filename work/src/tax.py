@@ -118,9 +118,10 @@ class TaxEvent:
     taxable_base: float
     rate: float
     amount: float
-    pipeline_step: int
+    pipeline_step: Optional[int]    # PORT-011 step (None for terminal settlement)
     source_status: str = ""         # DIV-011: dividend status actual/estimate
     notes: str = ""
+    phase: str = "weekly"           # weekly (PORT-011 pipeline) | terminal
 
 
 @dataclass(frozen=True)
@@ -146,6 +147,7 @@ class AnnualLiability:
     paid_week: Optional[dt.date] = None
     paid_capital_gains_tax: float = 0.0
     paid_solidarity_tax: float = 0.0
+    settlement: str = "annual"      # annual (step 2 of Y+1) | terminal (final year, IND-020)
 
 
 @dataclass
@@ -203,9 +205,20 @@ class TaxState:
 
 
 # ============================================================================ annual settlement
-def close_tax_year(state: TaxState, params: TaxParams, year: int, week: dt.date) -> AnnualLiability:
-    """IND-006, IND-009, IND-010, IND-013, IND-019, IND-001, IND-002, IND-005: close tax year
-    ``year`` in step 2 of ``week`` (first retained week of a later year)."""
+SETTLEMENTS = {"annual": (2, "weekly", "paid in step 3"),
+               "terminal": (None, "terminal", "paid from terminal cash after the liquidation")}
+
+
+def close_tax_year(state: TaxState, params: TaxParams, year: int, week: dt.date,
+                   settlement: str = "annual") -> AnnualLiability:
+    """IND-006, IND-009, IND-010, IND-013, IND-019, IND-001, IND-002, IND-005, IND-020: close
+    tax year ``year`` - the single netting / loss-bucket / CG / solidarity algorithm used both
+    for the annual settlement (step 2 of the first retained week of a later year) and for the
+    terminal settlement of the final year (after the terminal liquidation, ``week`` = last
+    week, settlement='terminal')."""
+    if settlement not in SETTLEMENTS:
+        raise ValueError(f"settlement {settlement!r} not in {sorted(SETTLEMENTS)}")
+    step, phase, paid_txt = SETTLEMENTS[settlement]
     gains = [g for a, g, _ in state.realizations.get(year, []) if a in params.capital_assets]
     annual = math.fsum(gains)                      # exact rounding: independent of order
     offset, used = 0.0, []
@@ -244,21 +257,22 @@ def close_tax_year(state: TaxState, params: TaxParams, year: int, week: dt.date)
     sol_taxable = max(0.0, sol_base - params.solidarity_threshold_pln)
     sol = params.solidarity_rate * sol_taxable
     liab = AnnualLiability(year, week, annual, offset, tuple(used), taxable, new_bucket, cg,
-                           sol_base, sol)
+                           sol_base, sol, settlement=settlement)
     state.annual_liabilities[year] = liab
     used_txt = ",".join(f"{y}:{a!r}" for y, a in used) or "none"
     state.tax_events.append(TaxEvent(
-        week, "capital_gains_tax", "tax", "annual", year, "portfolio", "", annual, taxable,
-        params.capital_gains_rate, cg, 2,
+        week, "capital_gains_tax", "tax", settlement, year, "portfolio", "", annual, taxable,
+        params.capital_gains_rate, cg, step,
         notes=f"net realized stocks+gold+btc={annual!r}; loss_offset={offset!r} "
-              f"(buckets used {used_txt}); new_loss_bucket={new_bucket!r}; paid in step 3"))
+              f"(buckets used {used_txt}); new_loss_bucket={new_bucket!r}; {paid_txt}",
+        phase=phase))
     state.tax_events.append(TaxEvent(
-        week, "solidarity_tax", "tax", "annual", year, "portfolio", "", sol_base, sol_taxable,
-        params.solidarity_rate, sol, 2,
+        week, "solidarity_tax", "tax", settlement, year, "portfolio", "", sol_base, sol_taxable,
+        params.solidarity_rate, sol, step,
         notes=f"solidarity_base=max(0,taxable_gain {taxable!r})+external "
               f"{params.external_solidarity_base_pln!r}; threshold "
               f"{params.solidarity_threshold_pln!r}; dividends and RF income excluded; "
-              "paid in step 3"))
+              f"{paid_txt}", phase=phase))
     return liab
 
 

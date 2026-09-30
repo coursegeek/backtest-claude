@@ -21,6 +21,10 @@ so taxes, rebalancing and
 sell_to_pay extend this loop instead of duplicating it. Ledger invariants are checked after
 every step.
 
+After the last week the engine exposes ``EngineResult.final_snapshot`` (immutable
+PortfolioSnapshot); the terminal settlement (settlement.py) works on copies of it and is never
+a week of this loop.
+
 Time axis: ``EngineInputs.weeks`` is the retained run calendar. Weeks removed by
 missing.return_policy=drop (or common calendar gaps) are not on the portfolio time axis: their
 signal observations are not fed to the in-run signal state machine (they are reported as
@@ -168,9 +172,29 @@ class EngineResult:
     final_ledger: Ledger
     final_lots: dict
     issues: tuple
+    final_snapshot: Optional["PortfolioSnapshot"] = None   # state after the last week
 
 
 # ============================================================================ portfolio
+@dataclass(frozen=True)
+class PortfolioSnapshot:
+    """Complete, immutable portfolio state at the end of a week (every field is immutable:
+    frozen Ledger, CostModel and Lot records inside tuples)."""
+    week_key: dt.date
+    ledger: Ledger
+    costs: CostModel
+    cost_basis_method: str
+    lots: tuple                     # ((asset, (Lot, ...)), ...) sorted by asset
+    next_lot_id: int
+    unit_prices: tuple              # ((asset, unit price), ...) canonical order
+
+    def lots_of(self, asset: str) -> tuple:
+        return dict(self.lots).get(asset, ())
+
+    def unit_price(self, asset: str) -> float:
+        return dict(self.unit_prices)[asset]
+
+
 class WorkingPortfolio:
     """Mutable state of one run. Every change goes through a primitive that keeps the
     ledger, the cost basis book and the audit journals consistent."""
@@ -191,6 +215,28 @@ class WorkingPortfolio:
             if v > 0:
                 self.book.open_lot(a, inception, v / self.unit_price[a], v, "initial")
 
+    # ---------------------------------------------------------------- snapshot
+    def snapshot(self, week) -> "PortfolioSnapshot":
+        """Immutable, deep-copy-safe state after ``week``: ledger, cost basis lots, unit
+        prices and cost model (no journals). Used by terminal settlement and, later, by
+        walk-forward window boundaries."""
+        method, lots, next_id = self.book.snapshot()
+        return PortfolioSnapshot(week, self.ledger, self.costs, method, lots, next_id,
+                                 tuple((a, self.unit_price[a]) for a in RISKY_ASSETS))
+
+    @classmethod
+    def from_snapshot(cls, snap: "PortfolioSnapshot") -> "WorkingPortfolio":
+        """A new portfolio continuing from ``snap`` with empty journals; nothing is shared
+        with the portfolio the snapshot was taken from."""
+        pf = cls.__new__(cls)
+        pf.ledger = snap.ledger
+        pf.costs = snap.costs
+        pf.book = CostBasisBook.restore(snap.cost_basis_method, snap.lots, snap.next_lot_id)
+        pf.unit_price = dict(snap.unit_prices)
+        pf.trades, pf.payments, pf.transfers = [], [], []
+        pf.rebalance_events, pf.realizations, pf.dividends = [], [], []
+        return pf
+
     def _component(self, name: str) -> float:
         if name not in COMPONENTS:
             raise KeyError(name)
@@ -198,7 +244,7 @@ class WorkingPortfolio:
 
     # ---------------------------------------------------------------- trades
     def sell(self, week, asset, gross, reason, cash_component, confirm_week=None, step=1,
-             nominal_week=None) -> Optional[Trade]:
+             nominal_week=None, phase="weekly") -> Optional[Trade]:
         """Sell ``gross`` of ``asset``; net proceeds credited to ``cash_component`` (Q-017)."""
         before = self.ledger.asset(asset)
         if gross <= 0:
@@ -214,7 +260,7 @@ class WorkingPortfolio:
         self.ledger = self.ledger.replace(**{asset: after, cash_component: cash_before + net})
         trade = Trade(week, asset, "sell", reason, gross, cost, slip, net, before, after,
                       cash_before, cash_before + net, cash_component, real.units_sold,
-                      real.cost_basis, real.realized_gain, confirm_week, step, nominal_week)
+                      real.cost_basis, real.realized_gain, confirm_week, step, nominal_week, phase)
         self.trades.append(trade)
         return trade
 
@@ -254,7 +300,8 @@ class WorkingPortfolio:
         return trade
 
     # ---------------------------------------------------------------- cash
-    def pay(self, week, amount, event_type, source, context, step=3) -> Optional[Payment]:
+    def pay(self, week, amount, event_type, source, context, step=3,
+            phase="weekly") -> Optional[Payment]:
         """NAV outflow from an RF component (never negative)."""
         if amount <= 0:
             return None
@@ -265,11 +312,12 @@ class WorkingPortfolio:
             raise ValueError(f"{source} holds {available!r}, cannot pay {amount!r}")
         amount = min(amount, available)
         self.ledger = self.ledger.replace(**{source: 0.0 if amount == available else available - amount})
-        p = Payment(week, event_type, amount, step, source, context)
+        p = Payment(week, event_type, amount, step, source, context, phase)
         self.payments.append(p)
         return p
 
-    def transfer(self, week, source, destination, amount, reason, step=3) -> Optional[RfTransfer]:
+    def transfer(self, week, source, destination, amount, reason, step=3,
+                 phase="weekly") -> Optional[RfTransfer]:
         """Cost-free book transfer between RF components (Q-017)."""
         rf = (RF_BASE,) + tuple(reserve_name(a) for a in RISKY_ASSETS)
         if source not in rf or destination not in rf:
@@ -283,7 +331,7 @@ class WorkingPortfolio:
         self.ledger = self.ledger.replace(**{
             source: 0.0 if amount == available else available - amount,
             destination: self._component(destination) + amount})
-        t = RfTransfer(week, source, destination, amount, reason, step)
+        t = RfTransfer(week, source, destination, amount, reason, step, phase)
         self.transfers.append(t)
         return t
 
@@ -524,7 +572,8 @@ class Engine:
                             tuple(pf.transfers), tuple(pf.rebalance_events),
                             tuple(signal_records), tuple(skipped), tuple(pf.realizations),
                             tuple(pf.dividends), pre,
-                            pf.ledger, pf.lots_snapshot(), tuple(issues))
+                            pf.ledger, pf.lots_snapshot(), tuple(issues),
+                            pf.snapshot(inp.weeks[-1]))
 
     def _execute_signal(self, pf: WorkingPortfolio, week, asset, ex) -> None:
         params = self.inputs.params[asset]

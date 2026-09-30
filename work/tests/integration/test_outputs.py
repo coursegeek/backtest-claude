@@ -33,7 +33,7 @@ def test_tax_events_columns(taxed):
     assert rows and list(rows[0]) == ["week_key", "date", "event_type", "category", "settlement",
                                       "tax_year", "asset", "component", "gross_base",
                                       "taxable_base", "tax_base", "rate", "amount", "tax_due",
-                                      "pipeline_step", "source_status", "notes"]
+                                      "pipeline_step", "phase", "source_status", "notes"]
     for r in rows:
         assert r["date"] == r["week_key"] and r["tax_base"] == r["taxable_base"]
         assert r["tax_due"] == r["amount"] and r["category"] in ("tax", "cost")
@@ -42,8 +42,16 @@ def test_tax_events_columns(taxed):
             or r["event_type"] == "solidarity_tax"
         if r["settlement"] == "annual":
             assert int(r["tax_year"]) == int(r["week_key"][:4]) - 1 and r["pipeline_step"] == "2"
+            assert r["phase"] == "weekly"
+        elif r["settlement"] == "terminal":                 # final year, after the last week
+            assert r["week_key"] == res.engine.weeks[-1].week_key.isoformat()
+            assert int(r["tax_year"]) == int(r["week_key"][:4])
+            assert r["pipeline_step"] == "" and r["phase"] == "terminal"
         else:
             assert int(r["tax_year"]) == int(r["week_key"][:4]) and r["pipeline_step"] == "5"
+            assert r["phase"] == "weekly"
+    assert [r["event_type"] for r in rows if r["settlement"] == "terminal"] == [
+        "capital_gains_tax", "solidarity_tax"]
 
 
 def test_tax_event_types(taxed):
@@ -61,8 +69,13 @@ def test_tax_event_types(taxed):
         assert math.fsum(float(p["amount"]) for p in pays if p["event_type"] == t) == pytest.approx(due, rel=1e-12)
     st = json.loads((res.output_dir / "tax_state.json").read_text())
     total = math.fsum(float(r["amount"]) for r in rows if r["category"] == "tax")
-    assert st["state"]["total_tax_paid"] == pytest.approx(total, rel=1e-12)
-    assert st["parameters"]["capital_gains_rate"] == 0.19 and st["unsettled_open_year"] == 2026
+    assert st["after_terminal"]["total_tax_paid"] == pytest.approx(total, rel=1e-12)
+    weekly = math.fsum(float(r["amount"]) for r in rows if r["phase"] == "weekly")
+    assert st["before_terminal"]["total_tax_paid"] == pytest.approx(weekly, rel=1e-12)
+    assert st["parameters"]["capital_gains_rate"] == 0.19
+    assert st["before_terminal"]["open_year"] == 2026 and st["after_terminal"]["open_year"] is None
+    assert [p["context"] for p in pays if p["phase"] == "terminal"] == ["terminal_settlement"] * len(
+        [p for p in pays if p["phase"] == "terminal"])
 
 
 def test_weekly_portfolio_columns(taxed):
@@ -75,8 +88,13 @@ def test_weekly_portfolio_columns(taxed):
               "dividend_tax", "rf_interest_tax", "taxes_paid", "weight_start_stocks", "target_stocks"):
         assert k in rows[0], k
     ev = read("tax_events.csv")
-    assert math.fsum(float(r["taxes_paid"]) for r in rows) == pytest.approx(
+    weekly = math.fsum(float(r["taxes_paid"]) for r in rows)        # terminal taxes excluded
+    assert weekly == pytest.approx(math.fsum(float(e["amount"]) for e in ev if e["phase"] == "weekly"),
+                                   rel=1e-12)
+    assert weekly + res.terminal.terminal_tax_total == pytest.approx(
         math.fsum(float(e["amount"]) for e in ev), rel=1e-12)
+    assert len(rows) == len(res.engine.weeks)                       # no terminal weekly record
+    assert float(rows[-1]["nav_end"]) == res.terminal.pre_terminal_nav
     for r in rows:
         assert float(r["taxes_paid"]) == pytest.approx(
             float(r["annual_tax_paid"]) + float(r["dividend_tax"]) + float(r["rf_interest_tax"]), abs=1e-9)
@@ -119,3 +137,27 @@ def test_taxed_run_is_deterministic(taxed, tmp_path):
     for name in ("tax_events.csv", "weekly_portfolio.csv", "trades.csv", "payments.csv",
                  "realizations.csv", "dividend_reinvestments.csv", "tax_state.json"):
         assert (res.output_dir / name).read_bytes() == (again / name).read_bytes(), name
+
+
+def test_terminal_settlement_breakout(taxed):
+    """PORT-014, REP-017 (individual_pl part), IND-016: terminal_settlement.json holds the
+    breakout separate from the weekly path; terminal trades, payments and transfers are in
+    the audit files with phase=terminal and no pipeline step."""
+    res, read = taxed
+    doc = json.loads((res.output_dir / "terminal_settlement.json").read_text())
+    for k in ("pre_terminal_nav", "terminal_liquidation_costs", "terminal_transaction_costs",
+              "terminal_slippage", "terminal_capital_gains_tax", "terminal_solidarity_tax",
+              "terminal_foundation_tax", "terminal_tax_total", "after_tax_terminal_wealth"):
+        assert k in doc, k
+    rows = read("weekly_portfolio.csv")
+    assert float(rows[-1]["nav_end"]) == doc["pre_terminal_nav"]
+    assert doc["after_tax_terminal_wealth"] == pytest.approx(
+        doc["pre_terminal_nav"] - doc["terminal_liquidation_costs"] - doc["terminal_tax_total"], rel=1e-12)
+    term = [t for t in read("trades.csv") if t["phase"] == "terminal"]
+    assert term and all(t["reason"] == "terminal_liquidation" and t["pipeline_step"] == ""
+                        and t["week_key"] == rows[-1]["week_key"] for t in term)
+    assert all(t["phase"] == "weekly" and t["pipeline_step"] in "123" for t in read("trades.csv")
+               if t["reason"] != "terminal_liquidation")
+    assert [t["asset"] for t in term] == ["stocks", "gold", "btc"]
+    assert {r["phase"] for r in read("realizations.csv")} == {"weekly", "terminal"}
+    assert {p["phase"] for p in read("payments.csv") if p["context"] == "terminal_settlement"} == {"terminal"}

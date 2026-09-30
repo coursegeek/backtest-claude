@@ -78,9 +78,13 @@ def normalized_price_rows(series) -> list:
 TRADE_FIELDS = ["week_key", "asset", "side", "reason", "gross_traded_value", "transaction_cost",
                 "slippage", "net_cash_flow", "asset_value_before", "asset_value_after",
                 "reserve_before", "reserve_after", "cash_component", "units", "cost_basis",
-                "realized_gain", "confirm_week", "nominal_execution_week", "pipeline_step"]
-PAYMENT_FIELDS = ["week_key", "event_type", "amount", "pipeline_step", "funding_source", "context"]
-TRANSFER_FIELDS = ["week_key", "source", "destination", "amount", "reason", "pipeline_step"]
+                "realized_gain", "confirm_week", "nominal_execution_week", "pipeline_step",
+                "phase"]
+# phase: weekly = PORT-011 pipeline (pipeline_step 1..6), terminal = terminal settlement
+# after the last week (pipeline_step empty; never part of the weekly NAV path).
+PAYMENT_FIELDS = ["week_key", "event_type", "amount", "pipeline_step", "funding_source", "context",
+                  "phase"]
+TRANSFER_FIELDS = ["week_key", "source", "destination", "amount", "reason", "pipeline_step", "phase"]
 REBALANCE_FIELDS = ["week_key", "mode", "reason", "trigger_source_week", "nominal_execution_week",
                     "nav_after_signal", "amounts_due", "nav_net_for_rebalance",
                     "planned_final_nav", "realized_final_nav", "transaction_costs", "slippage",
@@ -105,9 +109,10 @@ def normalized_return_rows(role, points) -> list:
 # tax_base == taxable_base and tax_due == amount.
 TAX_EVENT_FIELDS = ["week_key", "date", "event_type", "category", "settlement", "tax_year", "asset",
                     "component", "gross_base", "taxable_base", "tax_base", "rate", "amount",
-                    "tax_due", "pipeline_step", "source_status", "notes"]
+                    "tax_due", "pipeline_step", "phase", "source_status", "notes"]
 REALIZATION_FIELDS = ["week_key", "tax_year", "asset", "units_sold", "proceeds_net", "cost_basis",
-                      "realized_gain", "lots_consumed"]
+                      "realized_gain", "lots_consumed", "phase"]
+TERMINAL_TRADE_REASON = "terminal_liquidation"
 DIVIDEND_FIELDS = ["week_key", "asset", "value_before_returns", "dividend_return", "gross_dividend",
                    "dividend_tax", "net_reinvested", "units", "unit_price", "lot_id", "pipeline_step"]
 
@@ -121,12 +126,30 @@ def tax_event_rows(events) -> list:
     return rows
 
 
-def realization_rows(realizations) -> list:
+def realization_rows(realizations, phase: str = "weekly") -> list:
     return [{"week_key": r.week_key, "tax_year": r.week_key.year, "asset": r.asset,
              "units_sold": r.units_sold, "proceeds_net": r.proceeds_net, "cost_basis": r.cost_basis,
              "realized_gain": r.realized_gain,
-             "lots_consumed": "|".join(f"{i}:{u!r}:{c!r}" for i, u, c in r.consumed)}
+             "lots_consumed": "|".join(f"{i}:{u!r}:{c!r}" for i, u, c in r.consumed),
+             "phase": phase}
             for r in realizations]
+
+
+def terminal_settlement_doc(t) -> dict:
+    """terminal_settlement.json: REP-017/PORT-014 breakout plus the full audit of the terminal
+    liquidation (trades, realizations), the final-year liability and the payments."""
+    doc = t.breakout()
+    doc["liquidation"] = [{k: fmt(getattr(x, k)) for k in TRADE_FIELDS} for x in t.liquidation_trades]
+    doc["final_year_liability"] = {k: fmt(v) if not isinstance(v, (int, float)) or isinstance(v, bool)
+                                   else v for k, v in vars(t.final_liability).items()
+                                   if k != "buckets_used"}
+    doc["final_year_liability"]["buckets_used"] = [list(b) for b in t.final_liability.buckets_used]
+    doc["terminal_payments"] = [{k: fmt(getattr(p, k)) for k in PAYMENT_FIELDS} for p in t.terminal_payments]
+    doc["reserve_consolidation"] = [{k: fmt(getattr(x, k)) for k in TRANSFER_FIELDS}
+                                    for x in t.terminal_transfers]
+    doc["note"] = ("terminal settlement is not a backtest week: weekly_portfolio.csv ends with "
+                   "pre_terminal_nav; terminal costs and taxes are not in the weekly NAV path")
+    return doc
 
 
 def dividend_rows(records) -> list:

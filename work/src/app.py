@@ -28,12 +28,13 @@ from .manifest import build_manifest, run_timestamp
 from .costs import CostModel
 from .engine import ComposedHooks, EngineInputs, WeekMarket, run_engine
 from .rebalancing import hooks_from_config
+from .settlement import TerminalSettlementResult, settle_terminal
 from .tax import IndividualTaxHooks, TaxState, tax_hooks_from_config
 from .models import RISKY_ASSETS, Severity, ValidationIssue, canonical_assets
 from .reporting import (DIVIDEND_FIELDS, NORMALIZED_FIELDS, PAYMENT_FIELDS, REALIZATION_FIELDS,
                         REBALANCE_FIELDS, SIGNAL_FIELDS, TAX_EVENT_FIELDS, TRADE_FIELDS,
                         TRANSFER_FIELDS, VALIDATION_FIELDS, dividend_rows, rebalance_rows,
-                        realization_rows, record_rows, tax_event_rows,
+                        realization_rows, record_rows, tax_event_rows, terminal_settlement_doc,
                         normalized_price_rows, normalized_return_rows, run_directory,
                         signal_rows, trade_rows, weekly_portfolio_fields, weekly_portfolio_rows,
                         write_csv, write_json)
@@ -147,8 +148,9 @@ class PortfolioRunResult:
     output_dir: Optional[Path] = None
     normalized: tuple = ()
     dividend_mode: str = "none"
-    tax_state: Optional[TaxState] = None
+    tax_state: Optional[TaxState] = None            # weekly (pre-terminal) tax state
     tax_params: Optional[object] = None
+    terminal: Optional[TerminalSettlementResult] = None   # separate from the weekly path
 
 
 def check_supported_run(cfg: ResolvedConfig) -> None:
@@ -370,8 +372,11 @@ def run_portfolio(cfg: ResolvedConfig, write: bool = True, hooks=None) -> Portfo
     result = run_engine(inputs, hooks)
     ctx["report"].extend(result.issues)
     tax = find_tax_hooks(hooks)
+    # IND-016/IND-020: terminal settlement on copies of the final state (never a weekly record);
+    # for tax.profile=none it is not applied (Q-032 open for the other profiles)
+    terminal = settle_terminal(result.final_snapshot, tax.params, tax.state) if tax else None
     out = PortfolioRunResult(engine=result, **ctx, tax_state=tax.state if tax else None,
-                             tax_params=tax.params if tax else None)
+                             tax_params=tax.params if tax else None, terminal=terminal)
     if write:
         out.output_dir = write_portfolio_outputs(cfg, out)
     return out
@@ -382,17 +387,25 @@ def write_portfolio_outputs(cfg: ResolvedConfig, res: PortfolioRunResult) -> Pat
     out = run_directory(cfg.get("report.output_dir"), cfg.get("report.run_name"), ts)
     (out / "config_resolved.yaml").write_text(cfg.to_yaml(res.as_of), encoding="utf-8")
     assets = canonical_assets(res.engine.pre_start)
-    events = tuple(res.tax_state.tax_events) if res.tax_state else ()
+    t = res.terminal
+    weekly_events = tuple(res.tax_state.tax_events) if res.tax_state else ()
+    events = weekly_events + (t.terminal_tax_events if t else ())
     write_csv(out / "weekly_portfolio.csv", weekly_portfolio_fields(assets),
-              weekly_portfolio_rows(res.engine, res.targets, assets, events))
+              weekly_portfolio_rows(res.engine, res.targets, assets, weekly_events))
     write_csv(out / "tax_events.csv", TAX_EVENT_FIELDS, tax_event_rows(events))
-    write_csv(out / "realizations.csv", REALIZATION_FIELDS, realization_rows(res.engine.realizations))
+    write_csv(out / "realizations.csv", REALIZATION_FIELDS,
+              realization_rows(res.engine.realizations)
+              + (realization_rows(t.terminal_realizations, "terminal") if t else []))
     write_csv(out / "dividend_reinvestments.csv", DIVIDEND_FIELDS,
               dividend_rows(res.engine.dividend_reinvestments))
-    write_csv(out / "trades.csv", TRADE_FIELDS, trade_rows(res.engine.trades))
-    write_csv(out / "payments.csv", PAYMENT_FIELDS, record_rows(res.engine.payments, PAYMENT_FIELDS))
+    write_csv(out / "trades.csv", TRADE_FIELDS,
+              trade_rows(res.engine.trades + (t.liquidation_trades if t else ())))
+    write_csv(out / "payments.csv", PAYMENT_FIELDS,
+              record_rows(res.engine.payments + (t.terminal_payments if t else ()), PAYMENT_FIELDS))
     write_csv(out / "rf_transfers.csv", TRANSFER_FIELDS,
-              record_rows(res.engine.transfers, TRANSFER_FIELDS))
+              record_rows(res.engine.transfers + (t.terminal_transfers if t else ()), TRANSFER_FIELDS))
+    if t is not None:
+        write_json(out / "terminal_settlement.json", terminal_settlement_doc(t))
     write_csv(out / "rebalance_events.csv", REBALANCE_FIELDS,
               rebalance_rows(res.engine.rebalance_events))
     write_csv(out / "signals.csv", SIGNAL_FIELDS, signal_rows(res.engine.signal_records))
@@ -401,10 +414,12 @@ def write_portfolio_outputs(cfg: ResolvedConfig, res: PortfolioRunResult) -> Pat
     tax_doc = {"tax_profile": cfg.get("tax.profile"), "dividend_mode": res.dividend_mode}
     if res.tax_state is not None:
         tax_doc.update({"parameters": dataclasses.asdict(res.tax_params),
-                        "state": res.tax_state.to_dict(),
-                        "unsettled_open_year": res.tax_state.open_year,
-                        "note": "the open final tax year is settled by terminal settlement, which "
-                                "is not implemented in this build"})
+                        "before_terminal": res.tax_state.to_dict(),
+                        "after_terminal": t.final_tax_state.to_dict(),
+                        "terminal": t.breakout(),
+                        "note": "before_terminal = state at the end of the weekly path (final "
+                                "year still open); after_terminal = after terminal liquidation "
+                                "and final-year settlement"})
     write_json(out / "tax_state.json", tax_doc)
     manifest = build_manifest(res.provenances, res.as_of, ts, cfg.command)
     manifest.update({
@@ -423,9 +438,10 @@ def write_portfolio_outputs(cfg: ResolvedConfig, res: PortfolioRunResult) -> Pat
                                         res.engine.skipped_signal_observations],
         "audit_outputs": ["payments.csv", "rf_transfers.csv", "rebalance_events.csv",
                           "tax_events.csv", "realizations.csv", "dividend_reinvestments.csv",
-                          "tax_state.json"],
-        "not_implemented_outputs": ["summary.csv (metrics)",
-                                    "terminal settlement (final open tax year unsettled)"],
+                          "tax_state.json"] + (["terminal_settlement.json"] if t else []),
+        "terminal_settlement": ("individual_pl: separate from the weekly path" if t else
+                                "not applied (tax.profile=none; Q-032 open for other profiles)"),
+        "not_implemented_outputs": ["summary.csv (metrics)"],
     })
     write_json(out / "data_manifest.json", manifest)
     return out

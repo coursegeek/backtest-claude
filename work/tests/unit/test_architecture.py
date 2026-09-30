@@ -53,3 +53,11 @@ def test_tax_module_boundaries():
     text = (SRC / "engine.py").read_text(encoding="utf-8")
     for word in ("0.19", "solidarity", "capital_gains", "loss_bucket"):
         assert word not in text
+
+
+def test_settlement_is_a_separate_layer():
+    """PORT-014, IND-017: terminal settlement is a layer after the engine; the weekly engine,
+    the tax hooks and reporting of the weekly path do not depend on it."""
+    assert imports("settlement") <= {"engine", "errors", "ledger", "models", "rf", "tax"}
+    for mod in ("engine", "tax", "rebalancing", "sell_to_pay", "ledger"):
+        assert "settlement" not in imports(mod), mod

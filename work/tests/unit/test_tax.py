@@ -396,3 +396,76 @@ def test_dividend_mode_off():
                            "data": {"dividend_file": "does_not_exist.csv"}}), write=False)
     assert r.dividend_mode == "none" and r.engine.dividend_reinvestments == ()
     assert {e.event_type for e in r.tax_state.tax_events} == {"rf_interest_tax"}
+
+
+def test_solidarity_external_base_above_threshold():
+    """Q-051 (RESOLVED, literal IND-002/004/005 model assumption): with zero realized gain and
+    external_solidarity_base_pln above the threshold, solidarity is charged on the excess."""
+    st = TaxState()
+    st.realizations[2010] = [("stocks", 0.0, D("2010-05-07"))]
+    p = TaxParams(external_solidarity_base_pln=1_500_000.0)
+    l = close_tax_year(st, p, 2010, D("2011-01-07"))
+    assert l.taxable_gain == 0.0 and l.capital_gains_tax == 0.0
+    assert l.solidarity_base == 1_500_000.0
+    assert l.solidarity_tax > 0 and l.solidarity_tax == pytest.approx(0.04 * 500_000.0, abs=1e-9)
+    # in the engine it becomes an AmountsDue item paid in step 3 of the first week of 2001
+    inp = engine_inputs({"stocks": [100.0] * 60}, first=4, targets={"stocks": 0.5, "rf": 0.5},
+                        returns={"stocks": [0.0] * 56}, params=QUIET)
+    hooks, tax = tax_hooks(external_solidarity_base_pln=1_200_000.0, rf_interest_rate=0.0)
+    res = run_engine(inp, hooks)
+    w = next(x for x in res.weeks if x.week_key == Y1)
+    assert w.amounts_due.items == (("solidarity_tax", pytest.approx(8_000.0, abs=1e-9)),)
+    assert [p.event_type for p in w.payments] == ["solidarity_tax"]
+    assert not res.realizations
+
+
+def test_dividend_estimate_policy_variants(tmp_path):
+    """Q-052 (RESOLVED): one file with an estimate block inside 2018 gives three distinct
+    outcomes: allow_with_warning uses the estimate weeks (status kept, one warning);
+    actual_only removes them from the source, so the missing policy decides (error, or the
+    weeks are dropped with missing.return_policy=drop); error_on_estimate fails."""
+    f = dividend_file(tmp_path / "div.csv", statuses={}, last="2019-06-28")
+    rows = f.read_text().splitlines()
+    est = {"2018-07-06", "2018-07-13", "2018-07-20"}
+    f.write_text("\n".join(r.replace(",actual", ",estimate") if r[:10] in est else r for r in rows) + "\n")
+    base = {"data": {"dividend_file": str(f)}}
+
+    r = run_portfolio(cfg(base), write=False)                          # allow_with_warning
+    assert len(r.engine.weeks) == 52
+    warn = [i for i in r.report.issues if i.code == "dividend_estimate"]
+    assert len(warn) == 1 and "2018-07-06..2018-07-20" in warn[0].message
+    status = {e.week_key.isoformat(): e.source_status for e in r.tax_state.tax_events
+              if e.event_type == "dividend_tax"}
+    assert {k for k, v in status.items() if v == "estimate"} == est
+
+    with pytest.raises(Exception) as err:                              # actual_only + error
+        run_portfolio(cfg({**base, "tax": {"dividend_estimate_policy": "actual_only"}}), write=False)
+    assert "missing dividend_return for run week 2018-07-06" in str(err.value)
+    r = run_portfolio(cfg({**base, "tax": {"dividend_estimate_policy": "actual_only"},
+                           "missing": {"return_policy": "drop"}}), write=False)
+    assert len(r.engine.weeks) == 49 and {w.isoformat() for w in r.calendar.dropped} >= est
+    assert {e.source_status for e in r.tax_state.tax_events if e.event_type == "dividend_tax"} == {"actual"}
+
+    with pytest.raises(DividendModeError):                             # error_on_estimate
+        run_portfolio(cfg({**base, "tax": {"dividend_estimate_policy": "error_on_estimate"}}),
+                      write=False)
+
+
+def test_terminal_insolvency_and_profile_scope():
+    """TAX-006 (D) at the terminal: taxes exceeding the terminal cash raise InsolvencyError
+    (never negative cash). Terminal settlement is applied for individual_pl only; for
+    tax.profile=none it is not applied (Q-032 remains open for the other profiles)."""
+    import pickle
+    from src.errors import InsolvencyError
+    from src.settlement import settle_terminal
+    inp = engine_inputs({"stocks": [100.0] * 12}, first=4, targets={"stocks": 1.0},
+                        returns={"stocks": [0.0] * 8}, params=QUIET, capital=10_000.0)
+    hooks, tax = tax_hooks(external_solidarity_base_pln=10_000_000.0)
+    res = run_engine(inp, hooks)
+    frozen = pickle.dumps((res.final_snapshot, tax.state))
+    with pytest.raises(InsolvencyError):
+        settle_terminal(res.final_snapshot, tax.params, tax.state)       # solidarity 360 000
+    assert pickle.dumps((res.final_snapshot, tax.state)) == frozen
+    assert run_portfolio(cfg({"tax": {"profile": "none"}}), write=False).terminal is None
+    r = run_portfolio(cfg(), write=False)
+    assert r.terminal is not None and r.terminal.pre_terminal_nav == r.engine.weeks[-1].nav_end

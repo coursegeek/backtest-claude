@@ -353,8 +353,9 @@ class Trade:
     cost_basis: float               # basis of units sold / cost of units bought
     realized_gain: Optional[float]  # sells only: net proceeds - cost basis (no tax here)
     confirm_week: Optional[dt.date] = None
-    pipeline_step: int = 1
+    pipeline_step: Optional[int] = 1               # PORT-011 step; None in the terminal phase
     nominal_execution_week: Optional[dt.date] = None   # scheduled week of a signal execution
+    phase: str = "weekly"                          # weekly (PORT-011 pipeline) | terminal
 
 
 @dataclass(frozen=True)
@@ -364,9 +365,10 @@ class Payment:
     week_key: dt.date
     event_type: str
     amount: float
-    pipeline_step: int
+    pipeline_step: Optional[int]    # PORT-011 step; None in the terminal phase
     funding_source: str             # ledger component debited
     context: str                    # e.g. sell_to_pay:A_rf_base, strategic_rebalance
+    phase: str = "weekly"           # weekly | terminal
 
 
 @dataclass(frozen=True)
@@ -377,7 +379,8 @@ class RfTransfer:
     destination: str
     amount: float
     reason: str
-    pipeline_step: int
+    pipeline_step: Optional[int]
+    phase: str = "weekly"
 
 
 @dataclass(frozen=True)

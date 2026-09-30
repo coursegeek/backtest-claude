@@ -1,18 +1,18 @@
 # IMPLEMENTATION_NOTES — Backtest V2 (clean-room)
 
 Stan: **foundation/core + core portfolio engine + rebalancing/sell_to_pay + podatki
-individual_pl** (sesja 5). Zaimplementowane: CLI i API importu, konfiguracja, modele,
-kalendarz, dostępność informacji, loadery z normalizacją kanoniczną, walidacja (semantyka luk
-Q-012), pipeline sygnałów, ledger, koszty transakcyjne, cost basis (lots), centralny tygodniowy
-engine PORT-011, rebalancing `signal-only/weekly/monthly/quarterly/annually(yearly)/band`,
-sell_to_pay (TAX-006), finansowanie należności przy rebalancingu (TAX-007) oraz moduł podatkowy
-`individual_pl` (`src/tax.py`: roczny CG z koszykami strat, danina solidarnościowa, podatek od
-dywidend z reinwestycją netto, podatek od RF); komenda `run` dla `tax.profile` none i
-individual_pl we wszystkich trybach rebalancingu.
-Nie ma jeszcze: terminal settlement (ostatni rok podatkowy runu pozostaje otwarty i nie jest
-rozliczany), profili fundacji i ich kosztów, pre-tax shadow run (Q-015 - silnik gotowy),
-metryk i `summary.csv`, scanów, optimize, tax-compare, walk-forward. Te tryby rozwiązują i
-walidują config, po czym kończą się kodem 3 z jawnym komunikatem (bez częściowych wyników).
+individual_pl + terminal settlement individual_pl** (sesja 6). Zaimplementowane: CLI i API
+importu, konfiguracja, modele, kalendarz, dostępność informacji, loadery z normalizacją
+kanoniczną, walidacja (semantyka luk Q-012), pipeline sygnałów, ledger, koszty transakcyjne,
+cost basis (lots), centralny tygodniowy engine PORT-011, rebalancing
+`signal-only/weekly/monthly/quarterly/annually(yearly)/band`, sell_to_pay (TAX-006),
+finansowanie należności przy rebalancingu (TAX-007), moduł podatkowy `individual_pl`
+(`src/tax.py`) oraz terminal settlement `individual_pl` (`src/settlement.py`) jako osobna
+warstwa po tygodniowej ścieżce; komenda `run` dla `tax.profile` none i individual_pl.
+Nie ma jeszcze: profili fundacji i ich kosztów, terminal settlement dla profilu none (Q-032),
+pre-tax shadow run (Q-015 - silnik gotowy), metryk i `summary.csv`, scanów, optimize,
+tax-compare, walk-forward. Te tryby rozwiązują i walidują config, po czym kończą się kodem 3 z
+jawnym komunikatem (bez częściowych wyników).
 
 Źródło prawdy dla statusów: `compliance_matrix.csv`; pytania: `implementation_questions.csv`.
 
@@ -217,7 +217,7 @@ Warstwy: `models`, `errors`, `config`, `calendar`, `availability`, `data_loader`
 32. **Adjudykacje**: Q-014, Q-015, Q-016, Q-018, Q-029, Q-035 RESOLVED (treść w
     implementation_questions.csv i AUDIT_REPORT §12). Nowe pytania: Q-051 (dosłowna formuła
     daniny z external base powyżej progu), Q-052 (semantyka `actual_only` vs `error_on_estimate`).
-    Q-030 pozostaje formalnie OPEN; zaimplementowano formułę z polecenia sesji 5 (pkt 35).
+    Q-030 RESOLVED w sesji 6 (formuła z pkt 35).
 33. **Moduł `src/tax.py`** (TAX-001): `TaxParams` (stawki z `tax.individual.*`,
     `zero_rates()` dla przyszłego shadow runu Q-015), `TaxEvent`, `LossBucket`,
     `AnnualLiability`, `TaxState` (realizacje per rok, koszyki, wygasłe straty, zobowiązania
@@ -230,7 +230,7 @@ Warstwy: `models`, `errors`, `config`, `calendar`, `availability`, `data_loader`
     roku Y+1 zamykane są wszystkie wcześniejsze otwarte lata (zwykle jeden): netting
     stocks+gold+btc (bez mark-to-market, bez dywidend i RF), koszyki strat, CG i danina.
     Transakcje kroku 1 tego tygodnia należą już do Y+1; sprzedaże sell_to_pay z kroku 3 też.
-    Ostatni (otwarty) rok runu nie jest rozliczany - wymaga terminal settlement.
+    Ostatni (otwarty) rok runu rozlicza terminal settlement (sesja 6, pkt 43-50).
 35. **Koszyki strat (IND-009/010/013)**: roczna strata netto roku Y tworzy koszyk używalny w
     Y+1..Y+N (N = `loss_carryforward_years`, domyślnie 5), zużywany oldest-first; przy dodatnim
     zysku `eligible_offset = min(suma pozostałych niewygasłych sald * loss_offset_fraction,
@@ -280,3 +280,48 @@ Warstwy: `models`, `errors`, `config`, `calendar`, `availability`, `data_loader`
     2026-06-26 (koniec staged pliku dywidend, ostrzeżenia NORM-011), 443 tygodnie, zdarzenia
     dividend_tax/rf_interest_tax co tydzień, CG i danina dla lat 2018-2025, rok 2026 otwarty;
     Σ zdarzeń = Σ taxes_paid = total_tax_paid. Tylko dowód mechaniki (Q-002/Q-004/Q-008).
+
+## Terminal settlement individual_pl (sesja 6)
+
+43. **Adjudykacje**: Q-030, Q-051, Q-052 RESOLVED; Q-032 rozstrzygnięty dla individual_pl i
+    formalnie OPEN dla fundacji/profilu none (dla `tax.profile=none` terminal settlement nie
+    jest stosowany; `PortfolioRunResult.terminal is None`).
+44. **Oddzielna warstwa** (`src/settlement.py`, PORT-014, IND-017): terminal settlement nie jest
+    tygodniem backtestu. Engine kończy się `EngineResult.final_snapshot` - niemutowalnym
+    `PortfolioSnapshot` (frozen Ledger, CostModel, krotki frozen Lot z `next_lot_id`, ceny
+    jednostek); `WorkingPortfolio.from_snapshot()` odtwarza z niego nowy portfel z pustymi
+    dziennikami (bez rekonstrukcji cost basis z wartości), `snapshot()` daje dokładny round trip.
+    Rozliczenie działa na tym klonie i na `TaxState.copy()`; `EngineResult.weeks`, transakcje,
+    płatności i tygodniowe TaxEvents nie są zmieniane, nie powstaje rekord tygodniowy ani zwrot.
+    weekly_portfolio.csv kończy się `nav_end == pre_terminal_nav`; terminalne koszty/podatki nie
+    wchodzą do ścieżki NAV, zwrotów ani drawdownu.
+45. **Kolejność** (IND-016, IND-020): likwidacja 100% stocks/gold/btc w kolejności kanonicznej
+    (`reason=terminal_liquidation`, `phase=terminal`, `pipeline_step` puste, `week_key` =
+    ostatni zachowany Friday), koszty i slippage wg REB-003/004, cost basis FIFO/average_cost,
+    `Realization`; wpływy netto do rf_base; składniki RF nie są handlowane. Realizacje trafiają do
+    roku Friday week_key ostatniego tygodnia (otwartego roku), potem `close_tax_year(...,
+    settlement="terminal")` - ta sama funkcja nettingu/koszyków/CG/daniny co przy zamknięciu
+    rocznym (różni się tylko etykieta settlement, phase i brak kroku PORT-011).
+46. **Płatność**: rezerwy RF są konsolidowane do rf_base darmowymi transferami
+    (`terminal_consolidation`, phase terminal), a CG i danina płacone z rf_base jako `Payment`
+    (`context=terminal_settlement`, phase terminal). Wynik nie zależy od kolejności kluczy aktywów
+    (kolejność kanoniczna); brak gotówki => `InsolvencyError`, nigdy ujemny cash.
+47. **TaxEvents terminalne**: `capital_gains_tax` i `solidarity_tax` z `settlement=terminal`,
+    `phase=terminal`, `pipeline_step` puste, `week_key` = ostatni tydzień, `tax_year` = rok
+    finalny, pełne podstawy i stawki; także z kwotą 0.
+48. **`TerminalSettlementResult`** (pole `PortfolioRunResult.terminal`): pre_terminal_nav,
+    liquidation_trades, terminal_transaction_costs, terminal_slippage, terminal_trading_costs,
+    nav_after_liquidation, terminal/final-year realized gain, loss_offset, taxable_gain,
+    terminal CG i danina, terminal_tax_total, after_tax_terminal_wealth, final_cash_ledger,
+    final_liability, `tax_state_before_terminal` i `final_tax_state`. `breakout()` zawiera pola
+    REP-017 dla individual_pl (terminal_foundation_tax = null).
+49. **Wyjścia**: trades.csv / payments.csv / rf_transfers.csv / realizations.csv z kolumną
+    `phase` (weekly | terminal; terminalne wiersze na końcu), tax_events.csv z kolumną `phase` i
+    zdarzeniami terminalnymi, `terminal_settlement.json` (breakout + audyt likwidacji,
+    zobowiązanie roku finalnego, płatności, konsolidacja), `tax_state.json` z `before_terminal`,
+    `after_terminal` i `terminal`. `Σ weekly taxes_paid + terminal_tax_total =
+    final total_tax_paid = Σ tax_events(category=tax)` (TEST-024 rozszerzony).
+50. **Run na staged danych** (individual_pl, band 1 pp, 10+5 bps, 2018-01-01..2026-07-31, koniec
+    obcięty do 2026-06-26): kod 0; 443 wiersze tygodniowe, ostatni `nav_end` = pre_terminal_nav;
+    trzy terminalne sprzedaże, rok 2026 rozliczony terminalnie. Tylko dowód mechaniki
+    (Q-002/Q-004/Q-008).

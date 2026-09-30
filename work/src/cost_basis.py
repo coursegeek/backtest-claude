@@ -47,6 +47,18 @@ class CostBasisBook:
         self._lots: dict = {}
         self._next_id = 1
 
+    def snapshot(self) -> tuple:
+        """Immutable state: (method, ((asset, (Lot, ...)), ...), next_lot_id)."""
+        return (self.method, tuple((a, tuple(self._lots[a])) for a in sorted(self._lots)),
+                self._next_id)
+
+    @classmethod
+    def restore(cls, method: str, lots: tuple, next_id: int) -> "CostBasisBook":
+        book = cls(method)
+        book._lots = {a: list(ls) for a, ls in lots if ls}
+        book._next_id = next_id
+        return book
+
     def copy(self) -> "CostBasisBook":
         other = CostBasisBook(self.method)
         other._lots = {a: list(v) for a, v in self._lots.items()}

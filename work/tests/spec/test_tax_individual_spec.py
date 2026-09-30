@@ -194,3 +194,74 @@ def test_loss_carryforward_5y():
     # loss_carryforward_years = 2
     st, out = run({2010: -50_000.0, 2013: 10_000.0}, TaxParams(loss_carryforward_years=2))
     assert out[2013].loss_offset == 0.0 and st.expired_losses == [(2010, 50_000.0, 2012)]
+
+
+def test_terminal_liquidation():
+    """TEST-033 / IND-016, IND-020, Q-032 (individual_pl): at the end of the backtest all
+    stocks/gold/BTC are sold (costs, FIFO basis, realizations), the final tax year is netted
+    with carried losses, CG and solidarity are charged and after-tax terminal wealth is cash
+    after tax on the previously unrealized gains; the weekly path is untouched."""
+    import math
+    from fixtures.builders import annual_tax_inputs
+    from src.settlement import settle_terminal
+
+    # A) TEST_PLAN numbers: open lots +100 000 (stocks) and -30 000 (gold) -> 70 000 -> 13 300
+    n = idx(dt.date(2001, 3, 30)) + 1
+    exit_at = idx(dt.date(2000, 6, 2))
+    rets_s, rets_g = [0.0] * (n - 4), [0.0] * (n - 4)
+    rets_s[idx(dt.date(2000, 3, 3)) - 4] = 1.0            # stocks 200 000 -> 400 000
+    rets_g[idx(dt.date(2000, 10, 6)) - 4] = -0.25         # gold 120 000 -> 90 000
+    inp = engine_inputs({"stocks": [100.0] * exit_at + [50.0] * (n - exit_at), "gold": [100.0] * n},
+                        first=4, targets={"stocks": 0.625, "gold": 0.375},
+                        returns={"stocks": rets_s, "gold": rets_g}, capital=320_000.0,
+                        params={"stocks": params_for("stocks"),
+                                "gold": params_for("gold", threshold_off=0.9, threshold_on=0.9)})
+    hooks, tax = tax_hooks()
+    res = run_engine(inp, hooks)
+    exit_trade = next(t for t in res.trades if t.reason == TradeReason.SIGNAL_EXIT)
+    assert (exit_trade.week_key, exit_trade.realized_gain) == (dt.date(2000, 6, 9), 100_000.0)
+    assert tax.state.annual_liabilities[2000].capital_gains_tax == pytest.approx(19_000.0, abs=1e-9)
+    snap = res.final_snapshot
+    assert (snap.ledger.stocks, snap.ledger.gold) == (200_000.0, 90_000.0)
+    assert [l.cost for l in snap.lots_of("stocks")] == [100_000.0]           # remaining lot
+    assert [l.cost for l in snap.lots_of("gold")] == [120_000.0]
+    t = settle_terminal(snap, tax.params, tax.state)
+    assert [(x.asset, x.reason, x.phase, x.pipeline_step) for x in t.liquidation_trades] == [
+        ("stocks", TradeReason.TERMINAL_LIQUIDATION, "terminal", None),
+        ("gold", TradeReason.TERMINAL_LIQUIDATION, "terminal", None)]
+    assert [(r.cost_basis, r.realized_gain) for r in t.terminal_realizations] == [
+        (100_000.0, 100_000.0), (120_000.0, -30_000.0)]
+    assert t.final_tax_year == 2001 and t.final_year_realized_gain == 70_000.0
+    assert t.terminal_capital_gains_tax == pytest.approx(13_300.0, abs=1e-9)
+    assert t.terminal_solidarity_tax == 0.0 and t.terminal_trading_costs == 0.0
+    assert t.pre_terminal_nav == res.weeks[-1].nav_end == 471_000.0
+    assert t.after_tax_terminal_wealth == pytest.approx(471_000.0 - 13_300.0, abs=1e-9)
+    assert t.final_cash_ledger.components() == {
+        "stocks": 0.0, "gold": 0.0, "btc": 0.0, "rf_base": t.after_tax_terminal_wealth,
+        "rf_reserve_stocks": 0.0, "rf_reserve_gold": 0.0, "rf_reserve_btc": 0.0}
+
+    # B) with costs, a partial realization earlier in the final year (sell_to_pay of the 2001
+    #    tax on 2002-01-04) and exact FIFO basis of the remaining lots
+    inp = annual_tax_inputs()
+    hooks, tax = tax_hooks("signal-only")
+    res = run_engine(inp, hooks)
+    snap = res.final_snapshot
+    t = settle_terminal(snap, tax.params, tax.state)
+    earlier = [r for r in res.realizations if r.week_key.year == t.final_tax_year]
+    assert earlier and all(r.week_key == dt.date(2002, 1, 4) for r in earlier)
+    for x, r in zip(t.liquidation_trades, t.terminal_realizations):
+        v = snap.ledger.asset(x.asset)
+        assert x.gross_traded_value == v and r.cost_basis == pytest.approx(
+            math.fsum(l.cost for l in snap.lots_of(x.asset)), rel=1e-15)
+        assert x.net_cash_flow == pytest.approx(v * (1 - 0.0015), rel=1e-15)
+        assert r.realized_gain == pytest.approx(x.net_cash_flow - r.cost_basis, rel=1e-12)
+    stock_basis = math.fsum(l.cost for l in snap.lots_of("stocks"))
+    assert snap.ledger.stocks - stock_basis > 100_000.0             # unrealized before terminal
+    assert t.final_year_realized_gain == pytest.approx(
+        math.fsum([r.realized_gain for r in earlier] + [r.realized_gain for r in t.terminal_realizations]),
+        rel=1e-12)
+    assert t.terminal_capital_gains_tax == pytest.approx(
+        0.19 * max(0.0, t.final_year_realized_gain - t.loss_offset), rel=1e-12)
+    assert t.after_tax_terminal_wealth == pytest.approx(
+        t.pre_terminal_nav - t.terminal_trading_costs - t.terminal_tax_total, rel=1e-12)
+    assert t.after_tax_terminal_wealth < t.nav_after_liquidation < t.pre_terminal_nav

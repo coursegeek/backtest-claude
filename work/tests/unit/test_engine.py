@@ -198,3 +198,30 @@ def test_tax_reduces_nav_when_paid():
         assert abs(step[2].nav - step[3].nav - paid) < 1e-7          # no costs in this fixture
         assert step[2].nav == w.nav_after_signal                        # nothing in step 2
         assert (paid > 0) == (w.week_key in (dt.date(2001, 1, 5), dt.date(2002, 1, 4)))
+
+
+def test_snapshot_clone_is_independent():
+    """PortfolioSnapshot: complete, immutable and deep-copy safe; a portfolio restored from it
+    can trade (e.g. terminal settlement) without changing the snapshot, the final weekly
+    state or any weekly record of the run."""
+    import copy
+    import pickle
+    from fixtures.builders import annual_tax_inputs, tax_hooks
+    from src.engine import WorkingPortfolio
+    from src.models import TradeReason
+    from src.settlement import settle_terminal
+    inp = annual_tax_inputs()
+    hooks, tax = tax_hooks("signal-only")
+    res = run_engine(inp, hooks)
+    snap = res.final_snapshot
+    frozen = pickle.dumps((snap, res.weeks, res.final_ledger, res.final_lots, res.trades))
+    assert copy.deepcopy(snap) == snap and snap.ledger == res.final_ledger
+    assert snap.week_key == inp.weeks[-1]
+    assert dict(snap.lots) == {a: l for a, l in res.final_lots.items() if l}
+    clone = WorkingPortfolio.from_snapshot(snap)
+    assert clone.snapshot(snap.week_key) == snap                      # exact round trip
+    clone.sell(snap.week_key, "stocks", snap.ledger.stocks * 0.5, TradeReason.TERMINAL_LIQUIDATION,
+               "rf_base", step=None, phase="terminal")
+    assert clone.ledger != snap.ledger and clone.book.lots("stocks") != snap.lots_of("stocks")
+    settle_terminal(snap, tax.params, tax.state)
+    assert pickle.dumps((snap, res.weeks, res.final_ledger, res.final_lots, res.trades)) == frozen
