@@ -17,6 +17,7 @@ import datetime as dt
 import math
 from collections import OrderedDict, deque
 from dataclasses import dataclass
+from typing import Optional
 
 from .availability import assert_available, evaluation_time
 from .calendar import WEEK
@@ -96,6 +97,62 @@ class SignalTracker:
             confirmed_state=ms.state, state_basis=ms.basis, confirmation=confirmed is not None,
             scheduled_execution_week=scheduled, effective_state=self.queue.effective_state,
             executed_target=exec_target, flags=all_flags)
+
+
+@dataclass(frozen=True)
+class SignalTrackerSnapshot:
+    """Immutable copy of a SignalTracker (walk-forward, Q-022): parameters, SMA window (keys,
+    prices, gap count), confirmation machine (state, basis, counters, previous key), effective
+    state, pending executions (FIFO) and observation counters. It holds no reference to a live
+    tracker; ``restore`` builds a new, independent tracker."""
+    params: SignalParams
+    window_keys: tuple
+    window_prices: tuple
+    gaps: int
+    machine: MachineState
+    effective_state: State
+    pending: tuple                  # ScheduledExecution (frozen), FIFO order
+    observed: int
+    last_key: Optional[dt.date]
+
+    @property
+    def asset(self) -> str:
+        return self.params.asset
+
+    @classmethod
+    def of(cls, tracker: "SignalTracker") -> "SignalTrackerSnapshot":
+        return cls(tracker.params, tuple(tracker.keys), tuple(tracker.prices), tracker.gaps,
+                   tracker.machine, tracker.queue.effective_state, tracker.queue.pending,
+                   tracker.observed, tracker.last_key)
+
+    def restore(self) -> "SignalTracker":
+        t = SignalTracker(self.params)
+        t.keys.extend(self.window_keys)
+        t.prices.extend(self.window_prices)
+        t.gaps = self.gaps
+        t.machine = self.machine
+        t.queue = ExecutionQueue(self.params.asset, self.effective_state, self.pending)
+        t.observed = self.observed
+        t.last_key = self.last_key
+        return t
+
+    def same_state(self, other: "SignalTrackerSnapshot") -> bool:
+        """Equal signal state (parameters, SMA window, machine, effective state, pending);
+        observation counters may differ (a trained and a live tracker saw the same prices
+        through different replays)."""
+        return (self.params == other.params and self.window_keys == other.window_keys
+                and self.window_prices == other.window_prices and self.gaps == other.gaps
+                and self.machine == other.machine and self.effective_state == other.effective_state
+                and self.pending == other.pending and self.last_key == other.last_key)
+
+
+def install_tracker(snap: SignalTrackerSnapshot, first_week: dt.date):
+    """A live tracker from a snapshot, as of the start of ``first_week``: executions scheduled
+    strictly before ``first_week`` only set the effective state (no trades, SIG-019); later
+    ones stay pending and run in pipeline step 1 of their week. Returns (tracker, applied)."""
+    tracker = snap.restore()
+    applied = tracker.due(first_week - dt.timedelta(days=1))
+    return tracker, tuple(ex for ex, _ in applied)
 
 
 def evaluate(series, params: SignalParams, until=None) -> tuple:

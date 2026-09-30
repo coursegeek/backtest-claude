@@ -3,7 +3,8 @@
 Stan: **wszystkie cztery profile podatkowe (none, individual_pl, family_foundation_15/19 z
 tax_event=terminal) w centralnym pipeline + terminal settlement + pre-tax shadow run + metryki +
 summary.csv** (sesja 8), **komenda `tax-compare`** (sesja 9), **scany `delay-scan`,
-`threshold-scan`, `rebalance-scan`** (sesja 10) **oraz in-sample `optimize`** (sesja 11). Zaimplementowane: CLI i API
+`threshold-scan`, `rebalance-scan`** (sesja 10), **in-sample `optimize`** (sesja 11) **oraz
+walk-forward `optimize --optimization-mode walk-forward`** (sesja 12). Zaimplementowane: CLI i API
 importu, konfiguracja, modele, kalendarz, dostępność informacji, loadery z normalizacją
 kanoniczną, walidacja (semantyka luk Q-012), pipeline sygnałów, ledger, koszty transakcyjne, cost
 basis (lots), centralny tygodniowy engine PORT-011, rebalancing
@@ -11,11 +12,12 @@ basis (lots), centralny tygodniowy engine PORT-011, rebalancing
 należności przy rebalancingu (TAX-007), moduł podatkowy `individual_pl` (`src/tax.py`), moduł
 fundacji (`src/foundation.py`), terminal settlement (`src/settlement.py`), pre-tax shadow run
 (Q-015), moduł metryk (`src/metrics.py`), `summary.csv`, orkiestrator `tax-compare`
-(`src/tax_compare.py`), scany (`src/scans.py`) i optimizer in-sample (`src/optimizer.py`).
+(`src/tax_compare.py`), scany (`src/scans.py`), optimizer in-sample (`src/optimizer.py`) i
+walk-forward (`src/walk_forward.py`).
 Nie ma jeszcze: `tax.foundation.tax_event=distribution_schedule` (Q-037, jawny błąd),
 niezerowego internal trading tax fundacji (Q-047, jawny błąd), rolling_metrics.csv
-(MET-022/023, SHOULD), walk-forward (`optimize --optimization-mode walk-forward`, Q-022). Te
-tryby kończą się kodem 3 z jawnym komunikatem (bez częściowych wyników).
+(MET-022/023, SHOULD). Te tryby kończą się kodem 3 z jawnym komunikatem (bez częściowych
+wyników).
 
 Źródło prawdy dla statusów: `compliance_matrix.csv`; pytania: `implementation_questions.csv`.
 
@@ -45,6 +47,10 @@ python work/backtest.py optimize --start 2018-01-01 --end 2026-07-31 --btc-weigh
        --gold-weight 0:25:1 --stocks-weight remainder --objective after_tax_cagr \
        --tax-profile individual_pl --dividend-tax-mode smoothed_weekly \
        --dividend-file SPX_dividend_return_weekly_1970_2026.csv                       # S05 / CLI-005
+python work/backtest.py optimize --optimization-mode walk-forward \
+       --optimize-params weights,ma,threshold,delay --walk-forward-window rolling \
+       --train-years 15 --test-years 5 --ma-grid 40,50,60 --threshold-grid 0,1,3,5 \
+       --delay-grid 1:4        # CLI-011: na danych staged kod 1 "insufficient history ..." (Q-020)
 python work/tools/check_audit_consistency.py --allow-pass
 ```
 
@@ -54,8 +60,8 @@ python work/tools/check_audit_consistency.py --allow-pass
 Warstwy: `models`, `errors`, `config`, `calendar`, `availability`, `data_loader`, `validation`,
 `signals`, `confirmation`, `scheduling`, `signal_analysis`, `allocation`, `rf`, `costs`,
 `cost_basis`, `ledger`, `engine`, `rebalancing`, `sell_to_pay`, `tax`, `foundation`, `settlement`,
-`metrics`, `manifest`, `reporting`, `tax_compare`, `scans` i `optimizer` (orkiestratory nad
-`app.prepare_run` / `app.run_prepared`). `src` jest pakietem importowanym jako `src.*` (Q-044).
+`metrics`, `manifest`, `reporting`, `tax_compare`, `scans`, `optimizer` i `walk_forward`
+(orkiestratory nad `app.prepare_run` / `app.run_prepared` / `engine.run_engine`). `src` jest pakietem importowanym jako `src.*` (Q-044).
 
 ## Decyzje implementacyjne
 
@@ -679,3 +685,108 @@ Warstwy: `models`, `errors`, `config`, `calendar`, `availability`, `data_loader`
     wag, 2018-01-05..2026-06-26 (443 tygodnie, kalendarz ograniczony dywidendami),
     final_wealth_pre_tax 3 785 934.37, after_tax_terminal_wealth 3 131 083.58, CAGR 16.98%,
     after-tax CAGR 14.39%, max DD 34.11%, after-tax max DD 37.05%, podatki 504 542.60.
+
+## Walk-forward (sesja 12)
+
+98. **Q-022 (RESOLVED) - model**: TRAIN to niezależny, hipotetyczny backtest służący wyłącznie
+    do wyboru parametrów; OOS to jedna ciągła ścieżka portfela. Kandydaci treningowi są pełnymi
+    runami (`run_prepared`: podatki/koszty, terminal settlement, pre-tax shadow, metryki - np.
+    fundacja płaci w treningu setup/admin), ale stan treningowy nigdy nie staje się stanem OOS.
+    Z treningu do OOS przechodzą tylko: wybrane wagi i parametry oraz snapshot stanu sygnału
+    wybranego kandydata na koniec okna treningowego (z oczekującymi wykonaniami).
+99. **Dane raz**: najpierw cały grid (wagi Q-041 x wymiary sygnałowe), unia aktywów wagowo
+    poprawnych kandydatów, maksymalne MA / confirmation / delay gridu (warm-up), potem jedno
+    `prepare_run(assets=unia, warmup_params=max, auto_start=True)`. Bez `--start` pierwszy
+    tydzień = pierwszy wspólny tydzień z warm-upem najbardziej wymagającego punktu gridu (warm-up
+    nie wchodzi do celu); `run.start` jest początkiem najwcześniejszej historii treningowej.
+100. **Widok treningowy (WF-004/014, META-003)**: `PreparedRun.training_view(train_start,
+    train_end, test_start)` fizycznie zawiera wyłącznie tygodnie okna, ich rekordy rynku,
+    obserwacje sygnału z `week_key < test_start` i `available_at < test_start` (cała wcześniejsza
+    historia zostaje do warm-upu), issues i wiersze znormalizowane sprzed test_start, bez CPI.
+    `max_information_week() < test_start` jest zapisane per okno w `walk_forward_manifest.json`
+    (`no_future_training_checks_passed`). `training_input_sha256` hashuje treść widoku (bez
+    hashy całych plików źródłowych, które obejmują też przyszłość).
+101. **Okna (WF-002/003/011/012/015/016, Q-020)**: pierwszy anchor = najwcześniejszy tydzień
+    treningowy + `train_years` lat kalendarzowych (29 II -> 28 II); `test_start` = pierwszy
+    zachowany piątek >= anchor; `train_end` = zachowany tydzień przed test_start; rolling:
+    `train_start` = pierwszy tydzień >= anchor - train_years, anchored: stały start. Kolejne
+    anchory co `step_years` (domyślnie test_years; całkowity = lata kalendarzowe, ułamkowy =
+    round_half_up(step x 365.2425) dni). Segment OOS i = [test_start_i, tydzień przed
+    test_start_{i+1}], ostatni do końca danych (zawsze zachowany, WF-015); `nominal_test_end` =
+    ostatni piątek przed anchor + test_years; `actual_test_days` = actual_oos_end - test_start +
+    1, `actual_test_years` = dni / 365.2425. Brak pełnego okna treningowego ->
+    `InsufficientHistoryError` "insufficient history for requested walk-forward training window"
+    (kod 1), okno treningowe nigdy nie jest skracane.
+102. **Grid (WF-006..010)**: iloczyn wyłącznie parametrów z `--optimize-params` w kolejności
+    wagi (zewnętrzne, grid Q-041), ma, threshold, delay, confirmation, sell_fraction,
+    rebalance_band; stabilny `grid_index`. Jedna wartość gridu ustawia parametr wszystkich
+    aktywnych aktywów ryzykownych (threshold: off = on = p w procentach CLI; confirmation: off =
+    on = N). Domyślne gridy: ma [50], threshold [0.03], delay [1]; confirmation wymaga
+    `--confirmation-grid`, rebalance_band wymaga `--band-pp` (każdy kandydat: rebalance=band,
+    band_pp=p); `--sell-fraction` przyjmuje listę/zakres dziesiętny tylko w walk-forward z
+    sell_fraction w `--optimize-params` (bez gridu - wartości z configu). Bez `weights` wymagane
+    jawne `allocation.targets` (ALLOC-001). Grid dla parametru spoza listy -> ConfigError.
+    CLI-011: 676 x 3 x 4 x 4 = 32 448 kandydatów na okno.
+103. **Selekcja treningowa**: dokładnie logika in-sample optimizera (`evaluate_candidates` +
+    `assemble`: cele OPT-007, limit maxDD, objective_unavailable, odrzucenia wag, tie-break Q-041
+    rozszerzony o grid_index tylko dla identycznych wag). `--jobs` zrównolegla kandydatów w
+    obrębie okna, okna są sekwencyjne; wyniki bajtowo identyczne dla `--jobs 1` i `2`.
+104. **Pierwsze okno OOS**: nowy portfel z initial_capital, wybranymi wagami i stanami
+    sygnału z treningu (alokacja początkowa: bez Trade, kosztów i turnover; setup fundacji raz);
+    oczekujące wykonania z treningu z terminem w OOS są przejmowane (termin w pierwszym tygodniu
+    -> krok 1).
+105. **Kontynuacja (WF-013, TEST-037)**: po każdym segmencie `OOSContinuationState`
+    (PortfolioSnapshot: ledger z rf_base i rezerwami, loty z id i cost basis, next_lot_id, ceny
+    jednostkowe; kopia TaxState/FoundationState: realizacje, loss buckets, otwarty rok,
+    zobowiązania, stan admin, sumy, zdarzenia; snapshoty trackerów; oczekujący trigger band;
+    ostatni tydzień; cele, parametry i rebalancing). Kolejny segment startuje przez
+    `engine.EngineStart` (bez alokacji i kosztów) z hookami na przeniesionym stanie; roczny
+    podatek / koszt admin może zostać ustalony w kroku 2 pierwszego tygodnia nowego okna. Przy
+    stałej selekcji sklejona ścieżka jest dokładnie równa jednemu ciągłemu runowi (NAV, transakcje,
+    płatności, rebalancing z przeniesionym triggerem band, zdarzenia podatkowe, terminal,
+    shadow, wszystkie metryki) dla none, individual_pl i obu fundacji.
+106. **Stan sygnału na granicy (WF-014)**: aktywo nadal aktywne z identycznymi parametrami ->
+    żywy tracker kontynuowany (okno SMA, liczniki potwierdzeń, stan, kolejka; jego oczekujące
+    wykonania idą jako transakcje w kroku 1, dokładnie jak w ciągłym runie; zgodność ze stanem
+    treningowym raportowana w `carried_state_matches_training`); zmienione parametry lub nowe
+    aktywo -> snapshot wybranego kandydata TRAIN (instalowany na test_start; wykonania z
+    terminem przed nim ustawiają tylko stan), stare oczekujące wykonania anulowane, nowe
+    przejęte; aktywo nieaktywne -> anulowanie jego kolejki. Snapshot (`SignalTrackerSnapshot`)
+    jest niemutowalny, memo rekonstrukcji zwraca głębokie kopie.
+107. **Rebalance na granicy**: wymuszany przy zmianie wag, zbioru aktywnych aktywów,
+    trybu/pasma rebalancingu, zmianie stanu (lub podziału RISK_OFF) podmienionego trackera albo
+    osieroconej pozycji; inaczej granica bez transakcji. Kolejność pierwszego tygodnia: stany
+    sygnału -> krok 1 -> krok 2 (amounts_due) -> krok 3 `walk_forward_rebalance` -> krok 4 zwroty
+    -> krok 5 -> krok 6. Podział docelowy wg alokacji początkowej dla stanu efektywnego (RISK_ON
+    100% aktywo; RISK_OFF 1 - sell_fraction / sell_fraction); koszty, slippage, cost basis,
+    realizacje, późniejsze podatki; trade_count/turnover; należności tego tygodnia w tym samym
+    planie (TAX-007, cele z NAV netto). Oczekujący trigger band przenoszony tylko bez wymuszonego
+    rebalance, inaczej anulowany (`cancelled_superseded_by_walk_forward_rebalance`). Aktywo
+    wychodzące: sprzedaż z realizacją, jego rezerwa RF włączona (brak osieroconych rezerw).
+108. **Shadow i terminal**: ciągły pre-tax shadow (stawki 0, koszty, setup raz, admin, koszt
+    końcowy fundacji) z własnym stanem, nigdy resetowany; terminal settlement wyłącznie po
+    ostatnim tygodniu OOS (individual_pl raz, fundacja raz, none brak) - na granicach
+    wewnętrznych brak terminal_liquidation, foundation_distribution_liquidation, terminalnego
+    CGT i podatku od dystrybucji.
+109. **Wyjścia**: standardowe artefakty sklejonej ścieżki OOS (summary.csv, weekly_portfolio.csv
+    z celami obowiązującymi w danym tygodniu, trades, tax_events, payments, rf_transfers,
+    rebalance_events, signals, realizations, terminal_settlement, validation_report,
+    config_resolved.yaml, data_manifest.json, weekly_normalized.csv) + `walk_forward_results.csv`
+    (REP-016: wiersz na okno OOS: daty, długości, wybrany grid_index, wagi, MA, threshold,
+    delay, confirmation, sell_fraction, rebalancing, cel treningowy, NAV/zwrot/transakcje/
+    turnover/podatki/koszty OOS, rebalance na granicy), `training_grid_results.csv` (pełne
+    gridy z window_id), `walk_forward_boundary_events.csv` i `walk_forward_manifest.json`.
+    summary.csv: tylko sklejony OOS (growth_base_nav = kapitał początkowy, inception = piątek
+    przed pierwszym tygodniem OOS) + kolumny optimization_mode, walk_forward_window,
+    train_years, test_years, step_years, oos_windows, first_oos_week, last_oos_week; cele i
+    parametry sygnałów w summary tylko, gdy wszystkie okna miały te same.
+110. **WF-005 (SHOULD)**: każdy wiersz `training_grid_results.csv` ma `eligible_rank`,
+    `objective_gap_to_selected`, `selected_neighbour`; manifest per okno: top-5 eligible z luką
+    celu i sąsiedzi wyboru w gridzie (jeden krok na jednej osi) z luką celu.
+111. **Wyniki**: dokładne CLI-011 na danych staged -> kod 1 "insufficient history for requested
+    walk-forward training window: train_years=15 needs history from 2012-10-05 to 2027-10-05,
+    the common data ends 2026-08-28" (Q-020; kalendarz ograniczony BTC). Syntetyczne 26.5 roku
+    (1990-01-05..2016-06-10) z flagami CLI-011 i zredukowanym gridem wag (btc 0/10, gold 0/10,
+    192 kandydatów na okno, --jobs 2, ~30 s): OOS 2006-04-28..2011-04-22 (1821 dni),
+    2011-04-29..2016-04-22 (1821 dni), 2016-04-29..2016-06-10 (43 dni, częściowe), kod 0.
+    Scenariusz S09 w AB_SCENARIOS pozostaje bez zmian (brak sztucznych wyników).

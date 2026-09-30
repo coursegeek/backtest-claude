@@ -105,6 +105,8 @@ class Candidate:
     weight_sum: float
     status: str                     # "pending" (weight-valid, to evaluate) or a rejection status
     reason: str = ""
+    overrides: tuple = ()           # ((config key, value), ...) of non-weight dimensions (WF)
+    dims: tuple = ()                # ((dimension, value), ...) reported as candidate_<dimension>
 
     @property
     def targets(self) -> dict:
@@ -223,13 +225,13 @@ def resolve_jobs(value, n_tasks: int) -> int:
 def resolve_optimizer(cfg: ResolvedConfig) -> OptimizerSpec:
     """Validate the optimize configuration and the whole weight grid before any data."""
     if cfg.get("optimizer.mode") != "in-sample":
-        raise NotImplementedCommand("optimize --optimization-mode walk-forward is not implemented "
-                                    "in this build (walk-forward, Q-022); in-sample only")
+        raise ConfigError("resolve_optimizer handles --optimization-mode in-sample; walk-forward "
+                          "is resolved by walk_forward.resolve_walk_forward")
     params = cfg.get("optimizer.parameters") or ["weights"]
     if list(params) != ["weights"]:
         raise NotImplementedCommand(f"in-sample optimize optimizes the strategic weights only; "
                                     f"optimizer.parameters={list(params)} (signal/band grids) "
-                                    "belong to walk-forward (WF-006), not implemented")
+                                    "are optimized by --optimization-mode walk-forward (WF-006)")
     if cfg.get("allocation.targets") is not None or cfg.get("allocation.single_asset") not in (None, False):
         raise ConfigError("optimize builds the strategic targets from the weight grids "
                           "(--btc-weight/--gold-weight/--stocks-weight/--rf-weight); remove "
@@ -266,8 +268,9 @@ def resolve_optimizer(cfg: ResolvedConfig) -> OptimizerSpec:
 
 
 def candidate_config(base: ResolvedConfig, cand: Candidate) -> ResolvedConfig:
-    """A new configuration equal to the optimize configuration except allocation.targets."""
-    return base.with_overrides({"allocation.targets": cand.targets})
+    """A new configuration equal to the optimize configuration except allocation.targets (and,
+    for walk-forward candidates, the listed signal / band dimensions)."""
+    return base.with_overrides({"allocation.targets": cand.targets, **dict(cand.overrides)})
 
 
 # ============================================================================ classification
@@ -298,12 +301,14 @@ def classify(summary: dict, objective: str, limit: Optional[float]) -> tuple:
 def selection_key(row: dict, objective: str) -> tuple:
     """Q-041 total order (smaller is better): objective (negated exactly for maximized
     objectives), relevant max drawdown, turnover, (btc, gold, rf, stocks). No rounding, no
-    tolerance: a later criterion decides only on exact equality of the earlier ones."""
+    tolerance: a later criterion decides only on exact equality of the earlier ones. The final
+    grid_index only separates candidates with identical weights (walk-forward signal
+    dimensions, Q-022); in-sample weight grids never reach it."""
     metric, direction = OBJECTIVES[objective]
     v = float(row[metric])
     score = -v if direction == "maximize" else v
     return (score, float(row[relevant_drawdown_metric(objective)]), float(row["turnover"]),
-            tuple(float(row[f"weight_{k}"]) for k in LEXICOGRAPHIC_ORDER))
+            tuple(float(row[f"weight_{k}"]) for k in LEXICOGRAPHIC_ORDER), row["grid_index"])
 
 
 def select(rows, objective: str) -> Optional[dict]:
@@ -321,7 +326,8 @@ def base_row(spec: OptimizerSpec, cand: Candidate) -> dict:
             "objective": spec.objective, "objective_direction": spec.direction,
             "objective_metric": spec.objective_metric, "objective_value": None,
             "relevant_drawdown_metric": spec.drawdown_metric, "relevant_max_drawdown": None,
-            "max_drawdown_limit": spec.max_drawdown_limit}
+            "max_drawdown_limit": spec.max_drawdown_limit,
+            **{f"candidate_{k}": v for k, v in cand.dims}}
 
 
 def evaluated_row(spec: OptimizerSpec, cand: Candidate, summary: dict) -> dict:
@@ -444,11 +450,19 @@ def _progress(spec: OptimizerSpec, text: str) -> None:
 
 def run_optimize(cfg: ResolvedConfig, write: bool = True) -> OptimizerResult:
     spec = resolve_optimizer(cfg)
-    todo = tuple(c.grid_index for c in spec.to_evaluate)
     prepared = prepare_run(spec.base, assets=spec.union, auto_start=True)      # the only load
+    return assemble(spec, prepared, evaluate_candidates(spec, prepared), write)
+
+
+def evaluate_candidates(spec: OptimizerSpec, prepared: PreparedRun,
+                        label: str = "optimize") -> list:
+    """Run every weight-valid candidate of ``spec`` on ``prepared`` (in-process for one job, a
+    process pool otherwise). Returns the chunk results in completion order; ``assemble``
+    orders them by grid_index."""
+    todo = tuple(c.grid_index for c in spec.to_evaluate)
     ctx = _EvalContext(spec, prepared)
     chunks = _chunks(todo, spec.jobs_effective)
-    _progress(spec, f"optimize: {len(spec.candidates)} grid points, {len(todo)} weight-valid "
+    _progress(spec, f"{label}: {len(spec.candidates)} grid points, {len(todo)} weight-valid "
                     f"to evaluate, jobs={spec.jobs_effective}")
     results, done = [], 0
     if spec.jobs_effective == 1:
@@ -456,7 +470,7 @@ def run_optimize(cfg: ResolvedConfig, write: bool = True) -> OptimizerResult:
             out = evaluate_chunk(ctx, ch)
             results.append(out)
             done += len(ch)
-            _progress(spec, f"optimize: completed {done}/{len(todo)} evaluated candidates")
+            _progress(spec, f"{label}: completed {done}/{len(todo)} evaluated candidates")
     else:
         with concurrent.futures.ProcessPoolExecutor(
                 max_workers=spec.jobs_effective, mp_context=_mp_context(),
@@ -466,8 +480,8 @@ def run_optimize(cfg: ResolvedConfig, write: bool = True) -> OptimizerResult:
                 out = fut.result()                      # re-raises a candidate failure
                 results.append(out)
                 done += len(futures[fut])
-                _progress(spec, f"optimize: completed {done}/{len(todo)} evaluated candidates")
-    return assemble(spec, prepared, results, write)
+                _progress(spec, f"{label}: completed {done}/{len(todo)} evaluated candidates")
+    return results
 
 
 def assemble(spec: OptimizerSpec, prepared: PreparedRun, results: list, write: bool) -> OptimizerResult:

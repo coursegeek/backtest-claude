@@ -48,7 +48,8 @@ from .ledger import COMPONENTS, Ledger
 from .models import (RISKY_ASSETS, DividendReinvestment, Payment, RfTransfer, State, Trade,
                      TradeReason, canonical_assets)
 from .rf import RF_BASE, grow, reserve_name
-from .signal_analysis import reconstruct_tracker
+from .signal_analysis import (PreStartState, SignalTrackerSnapshot, install_tracker,
+                              reconstruct_tracker)
 
 TOL = 1e-12
 
@@ -173,6 +174,17 @@ class EngineResult:
     final_lots: dict
     issues: tuple
     final_snapshot: Optional["PortfolioSnapshot"] = None   # state after the last week
+    final_signal_states: dict = field(default_factory=dict)   # asset -> SignalTrackerSnapshot
+
+
+@dataclass(frozen=True)
+class EngineStart:
+    """Continuation of an existing path (walk-forward OOS segments, Q-022): the engine starts
+    from the portfolio snapshot (ledger, lots, unit prices, costs) instead of an initial
+    allocation; ``prev_week`` is the last retained week of the previous segment (calendar
+    triggers and tax years continue across the boundary)."""
+    portfolio: "PortfolioSnapshot"
+    prev_week: dt.date
 
 
 # ============================================================================ portfolio
@@ -461,11 +473,16 @@ class ComposedHooks(PipelineHooks):
 
 # ============================================================================ engine
 class Engine:
-    def __init__(self, inputs: EngineInputs, hooks: Optional[PipelineHooks] = None):
+    def __init__(self, inputs: EngineInputs, hooks: Optional[PipelineHooks] = None,
+                 start: Optional[EngineStart] = None, signal_states: Optional[dict] = None,
+                 carried: tuple = ()):
         if not inputs.weeks:
             raise ValueError("empty run calendar")
         self.inputs = inputs
         self.hooks = hooks or PipelineHooks()
+        self.start = start
+        self.signal_states = signal_states
+        self.carried = tuple(carried)
         self.assets = canonical_assets(inputs.params)
         self.first_week = inputs.weeks[0]
         self.run_start = inputs.run_start or self.first_week
@@ -474,6 +491,8 @@ class Engine:
         self.inception = self.run_start - WEEK          # Q-014: allocation one week before
 
     def _reconstruct(self):
+        if self.signal_states is not None:
+            return self._install()
         trackers, pre, issues = {}, {}, []
         for a in self.assets:
             tracker, state = reconstruct_tracker(self.inputs.signal_series[a],
@@ -482,20 +501,55 @@ class Engine:
             issues += state.issues
         return trackers, pre, issues
 
+    def _install(self):
+        """Signal trackers from given snapshots (walk-forward: the selected training state or
+        the carried live OOS state) instead of a replay of the history (Q-022). A selected
+        training state is installed as of the run start (executions due before it only set the
+        effective state, SIG-019); a ``carried`` live tracker continues unchanged - its pending
+        executions run as trades in step 1 of their (or the next retained) week, exactly as in
+        one continuous run."""
+        trackers, pre = {}, {}
+        if self.carried and self.start is None:
+            raise ValueError("carried signal trackers need a continuation start")
+        for a in self.assets:
+            snap = self.signal_states[a]
+            if snap.params != self.inputs.params[a]:
+                raise ValueError(f"{a}: signal snapshot parameters differ from the run's")
+            if a in self.carried:
+                tracker = snap.restore()
+            else:
+                tracker, _ = install_tracker(snap, self.run_start)
+            ms = tracker.machine
+            trackers[a] = tracker
+            pre[a] = PreStartState(a, self.run_start, tracker.observed, ms.state, ms.basis,
+                                   ms.exit_counter, ms.entry_counter, tracker.effective_state,
+                                   tracker.queue.pending, tracker.last_key, ())
+        return trackers, pre, []
+
     def run(self) -> EngineResult:
         inp = self.inputs
         trackers, pre, issues = self._reconstruct()
-        capital = self.hooks.investable_capital(inp.initial_capital)
-        sleeves = initial_sleeves(capital, inp.targets,
-                                  {a: pre[a].effective_state for a in self.assets}, inp.params)
-        initial = Ledger.from_sleeves(sleeves)
-        initial.check("initial allocation: ")
-        pf = WorkingPortfolio(initial, inp.costs, inp.cost_basis_method, self.inception)
+        if self.start is None:
+            capital = self.hooks.investable_capital(inp.initial_capital)
+            sleeves = initial_sleeves(capital, inp.targets,
+                                      {a: pre[a].effective_state for a in self.assets}, inp.params)
+            initial = Ledger.from_sleeves(sleeves)
+            initial.check("initial allocation: ")
+            pf = WorkingPortfolio(initial, inp.costs, inp.cost_basis_method, self.inception)
+            prev_week = None
+        else:                                           # continuation (no allocation, no cost)
+            pf = WorkingPortfolio.from_snapshot(self.start.portfolio)
+            initial = pf.ledger
+            prev_week = self.start.prev_week
+            if prev_week >= inp.weeks[0]:
+                raise ValueError("continuation must start after the previous segment")
         points = {a: list(inp.signal_series[a].points) for a in self.assets}
-        cursor = {a: next((i for i, p in enumerate(points[a]) if p.week_key >= self.run_start),
+        # a continuation resumes after the previous segment's last week, so observations of
+        # removed weeks in between are reported as skipped exactly as in one continuous run
+        after = self.run_start if self.start is None else self.start.prev_week + dt.timedelta(days=1)
+        cursor = {a: next((i for i, p in enumerate(points[a]) if p.week_key >= after),
                           len(points[a])) for a in self.assets}
         weeks, signal_records, skipped = [], [], []
-        prev_week = None
         for idx, week in enumerate(inp.weeks):
             start = pf.ledger
             marks = (len(pf.trades), len(pf.payments), len(pf.transfers), len(pf.rebalance_events),
@@ -573,7 +627,8 @@ class Engine:
                             tuple(signal_records), tuple(skipped), tuple(pf.realizations),
                             tuple(pf.dividends), pre,
                             pf.ledger, pf.lots_snapshot(), tuple(issues),
-                            pf.snapshot(inp.weeks[-1]))
+                            pf.snapshot(inp.weeks[-1]),
+                            {a: SignalTrackerSnapshot.of(trackers[a]) for a in self.assets})
 
     def _execute_signal(self, pf: WorkingPortfolio, week, asset, ex) -> None:
         params = self.inputs.params[asset]
@@ -592,5 +647,7 @@ class Engine:
                              reserve, ex.confirm_week, nominal_week=ex.execution_week)
 
 
-def run_engine(inputs: EngineInputs, hooks: Optional[PipelineHooks] = None) -> EngineResult:
-    return Engine(inputs, hooks).run()
+def run_engine(inputs: EngineInputs, hooks: Optional[PipelineHooks] = None,
+               start: Optional[EngineStart] = None,
+               signal_states: Optional[dict] = None, carried: tuple = ()) -> EngineResult:
+    return Engine(inputs, hooks, start, signal_states, carried).run()

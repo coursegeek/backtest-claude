@@ -149,6 +149,16 @@ TEST-021, TEST-037, TEST-049, `test_walk_forward.py`, CLI-011 (oczekiwany czytel
 staged, pełny przebieg na syntetycznym zakresie 25 lat), `walk_forward_rebalance` przy zmianie wag
 i stanu sygnału (Q-022).
 
+Zrealizowane w sesji 12: `tests/spec/test_walk_forward_spec.py` (TEST-021, TEST-037, TEST-049),
+`tests/unit/test_walk_forward.py` (grid CLI-011 = 32 448, tylko listowane parametry, gridy i
+jednostki, okna rolling/anchored, krok całkowity/ułamkowy, ostatnie okno, luki kalendarza,
+niemutowalność snapshotów i memo, sąsiedzi gridu) i `tests/integration/test_walk_forward_e2e.py`
+(stała selekcja = jeden ciągły run dla none/individual_pl/fundacji z przeniesionym triggerem
+band i granicami noworocznymi, brak terminal settlement na granicach, rebalance przy zmianie wag
+i wyjściu aktywów z rezerwą, anulowanie starych oczekujących wykonań przy zmianie parametrów,
+kontynuacja żywego trackera, wyjścia i manifest, serial vs parallel, CLI-011 staged = błąd Q-020,
+CLI-011 syntetyczne 26.5 roku = 2 pełne + 1 częściowe okno OOS).
+
 ## 9. Testy podatkowe
 
 TEST-010..017, TEST-024, TEST-032..035, TEST-046..048, TEST-050, TEST-052..054 oraz

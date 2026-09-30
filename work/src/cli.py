@@ -50,7 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
         add("--ma"); add("--threshold"); add("--threshold-off"); add("--threshold-on")
         add("--confirm-weeks", type=int); add("--confirm-off-weeks", type=int)
         add("--confirm-on-weeks", type=int)
-        add("--delay"); add("--sell-fraction", type=float); add("--risk-off-action")
+        add("--delay"); add("--sell-fraction"); add("--risk-off-action")
         add("--rebalance"); add("--rebalance-band-pp", type=float)
         add("--transaction-cost-bps", type=float); add("--slippage-bps", type=float)
         add("--tax-profile"); add("--dividend-tax-mode"); add("--dividend-estimate-policy")
@@ -135,10 +135,21 @@ def cli_layer(args) -> dict:
         sig["threshold_off"] = _pct(args.threshold_off, "--threshold-off")
     if args.threshold_on is not None:
         sig["threshold_on"] = _pct(args.threshold_on, "--threshold-on")
+    wf_params = [x.strip() for x in (args.optimize_params or "").split(",")]
+    if args.sell_fraction is not None:
+        if cmd == "optimize" and "sell_fraction" in wf_params:
+            # Q-022: walk-forward optimizes sell_fraction over a decimal grid ('0.25,0.5,0.75'
+            # or '0.25:0.75:0.25'); decimals, never percent
+            put("optimizer.sell_fraction_grid", parse_grid(args.sell_fraction, "--sell-fraction"))
+        else:
+            vals = parse_grid(args.sell_fraction, "--sell-fraction")
+            if len(vals) != 1:
+                raise ConfigError("--sell-fraction: one decimal fraction is expected (a list or "
+                                  "range only with optimize --optimize-params ...,sell_fraction)")
+            sig["sell_fraction"] = vals[0]
     for key, val in (("confirm_weeks", args.confirm_weeks),
                      ("confirm_off_weeks", args.confirm_off_weeks),
                      ("confirm_on_weeks", args.confirm_on_weeks),
-                     ("sell_fraction", args.sell_fraction),
                      ("risk_off_action", args.risk_off_action)):
         if val is not None:
             sig[key] = val

@@ -192,9 +192,9 @@ def risk_state_shares(week_states, assets) -> dict:
     week_states = list(week_states)
     n = len(week_states)
     out = {}
-    for a in assets:
-        on = sum(1 for s in week_states if getattr(s[a], "value", s[a]) == "RISK_ON")
-        off = sum(1 for s in week_states if getattr(s[a], "value", s[a]) == "RISK_OFF")
+    for a in assets:                    # an asset inactive in a week (walk-forward) counts neither
+        on = sum(1 for s in week_states if getattr(s.get(a), "value", s.get(a)) == "RISK_ON")
+        off = sum(1 for s in week_states if getattr(s.get(a), "value", s.get(a)) == "RISK_OFF")
         out[a] = (on / n, off / n) if n else (None, None)
     return out
 

@@ -236,14 +236,23 @@ kalendarzowe, rolling (MET-022/023).
 
 ## 12. Walk-forward
 
-* Okna: `rolling|anchored`, `train_years`, `test_years`, `step_years`, ostatnie okno częściowe
-  zawsze zachowane, faktyczna długość (WF-011/012/015/016, Q-022).
-* Trening wyłącznie na danych z `week_key < test_start` (WF-004, TEST-021): optymalizator dostaje
-  wycięty widok danych, nie pełny zbiór.
-* OOS: ciągły stan (NAV, loty, loss buckets, należności) przenoszony przez granice (WF-013,
-  TEST-037); rekonstrukcja stanu sygnału nowymi parametrami z danych sprzed OOS (WF-014);
-  różnica stanu lub zmiana wag → transakcje `walk_forward_rebalance` w kroku 1/3 pierwszego
-  tygodnia okna (Q-022).
+Zrealizowane w sesji 12 (`src/walk_forward.py`, Q-022 RESOLVED):
+
+* Grid tylko z `--optimize-params` (wagi Q-041 x ma x threshold x delay x confirmation x
+  sell_fraction x rebalance_band), jedna wartość dla wszystkich aktywnych aktywów, walidacja
+  przed danymi; dane przygotowane raz (unia aktywów, maksymalny warm-up gridu).
+* Okna: `rolling|anchored`, `train_years` (pełne, Q-020), `test_years`, `step_years`
+  (kalendarzowy lub dzienny), ostatni segment do końca danych zawsze zachowany, faktyczna
+  długość (WF-011/012/015/016).
+* Trening wyłącznie na `PreparedRun.training_view` (tygodnie, rynek i obserwacje sygnału z
+  `week_key`/`available_at < test_start`, bez CPI; WF-004, TEST-021) tą samą logiką selekcji co
+  in-sample optimizer.
+* OOS: jedna ciągła ścieżka (`engine.EngineStart`; portfel, loty, loss buckets, stan
+  podatkowy/fundacji, trackery sygnału, trigger band - WF-013, TEST-037); stan sygnału dla
+  nowych parametrów ze snapshotu treningu, dla niezmienionych kontynuacja żywego trackera
+  (WF-014); `walk_forward_rebalance` w kroku 3 pierwszego tygodnia okna przy zmianie wag,
+  aktywów, rebalancingu lub stanu (TAX-007 z należnościami tygodnia); jeden terminal settlement
+  po ostatnim tygodniu OOS; ciągły pre-tax shadow.
 * Brak wystarczającej historii → czytelny błąd (CLI-011 na danych staged, Q-020).
 
 ## 13. Obsługa błędów
@@ -257,7 +266,8 @@ kalendarzowe, rolling (MET-022/023).
 
 RESOLVED: Q-005 (normalizacja BTC Monday→Friday, zakres SEM-008), Q-006, Q-012 (luki kalendarza:
 cała historia, luka przerywa liczniki, polityki tylko dla brakującego źródła w tygodniu kalendarza
-runu), Q-020 (brak skracania okna treningowego). DATA BLOCKER (bez wpływu na implementację, tylko
+runu), Q-020 (brak skracania okna treningowego), Q-022 (walk-forward: niezależny TRAIN, ciągły
+OOS, sekcja 12). DATA BLOCKER (bez wpływu na implementację, tylko
 na PASS wymagań o danych kanonicznych): Q-002 złoto LBMA, Q-004 provenance splice akcji, Q-008
 schemat dywidend. Pozostałe pytania MAJOR/MINOR są implementowane wg `proposed_interpretation`
 za przełącznikami configu i opisane w `IMPLEMENTATION_NOTES.md`.
@@ -272,7 +282,7 @@ za przełącznikami configu i opisane w `IMPLEMENTATION_NOTES.md`.
 6. `tax`, `settlement` (TEST-010..017/032..035/046..048/050/052).
 7. `metrics`, `reporting`, `manifest` (TEST-020/022/024/036/043).
 8. `tax-compare` (sesja 9, CLI-006); scany (sesja 10, CLI-002/003/010); `optimizer` in-sample (sesja 11, TEST-009, CLI-004/005).
-9. `walk_forward` (TEST-021/037/049, CLI-011).
+9. `walk_forward` (sesja 12, TEST-021/037/049, CLI-011).
 10. Pełny przebieg testów, aktualizacja compliance matrix, `IMPLEMENTATION_NOTES.md`, `python tools/freeze_v2.py`.
 
 ## 16. Ryzyka

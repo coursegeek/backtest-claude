@@ -107,8 +107,8 @@ def test_invalid_grids_and_configuration():
             (["optimize", "--weights", "stocks=1"], ConfigError, "remove allocation.targets"),
             (["optimize", "--single-asset", "btc"], ConfigError, "remove allocation.targets"),
             (["optimize", "--asset", "btc"], ConfigError, "--asset is not used"),
-            (["optimize", "--optimization-mode", "walk-forward"], NotImplementedCommand,
-             "walk-forward"),
+            (["optimize", "--optimization-mode", "walk-forward"], ConfigError,
+             "resolve_walk_forward"),
             (["optimize", "--optimize-params", "weights,ma"], NotImplementedCommand, "WF-006"),
             (["optimize", "--max-drawdown-limit", "150"], ConfigError, "0..1")):
         with pytest.raises(err, match=msg):

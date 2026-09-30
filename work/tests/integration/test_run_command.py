@@ -147,7 +147,9 @@ def test_run_cli_exit_codes(tmp_path):
     opt = subprocess.run([sys.executable, str(WORK / "backtest.py"), "optimize", "--start",
                           "2018-01-01", "--optimization-mode", "walk-forward"],
                          capture_output=True, text=True, cwd=str(tmp_path))
-    assert opt.returncode == 3 and "not implemented" in opt.stderr
+    # walk-forward is implemented: 15 training years do not fit after 2018 (Q-020)
+    assert opt.returncode == 1 and "insufficient history for requested walk-forward training " \
+        "window" in opt.stderr
 
 
 def test_end_defaults_to_last_common_week():

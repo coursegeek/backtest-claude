@@ -206,7 +206,8 @@ def weekly_portfolio_fields(assets) -> list:
                "taxes_paid", "costs_paid"] + [f"state_{a}" for a in assets])
 
 
-def weekly_portfolio_rows(result, targets, assets, tax_events=()) -> list:
+def weekly_portfolio_rows(result, targets, assets, tax_events=(), targets_by_week=None) -> list:
+    """``targets_by_week`` (walk-forward): the strategic targets in force in each week."""
     by_week = {}
     for e in tax_events:
         by_week.setdefault(e.week_key, []).append(e)
@@ -221,8 +222,9 @@ def weekly_portfolio_rows(result, targets, assets, tax_events=()) -> list:
             r[f"weight_start_{s}"] = v
         for s, v in w.ledger_end.sleeve_weights().items():
             r[f"weight_end_{s}"] = v
+        tw = targets_by_week[w.week_key] if targets_by_week else targets
         for s in SLEEVES:
-            r[f"target_{s}"] = targets[s]
+            r[f"target_{s}"] = tw[s]
         for a in ("stocks", "gold", "btc"):
             r[f"return_{a}"] = w.market.asset_returns.get(a)
         r["return_rf"] = w.market.rf_return
@@ -238,7 +240,7 @@ def weekly_portfolio_rows(result, targets, assets, tax_events=()) -> list:
         r["rebalance"] = w.rebalance.reason if w.rebalance else ""
         r.update(weekly_tax_amounts(w, by_week.get(w.week_key, ())))
         for a in assets:
-            r[f"state_{a}"] = w.effective_states[a]
+            r[f"state_{a}"] = w.effective_states.get(a)       # empty when not active that week
         rows.append(r)
     return rows
 
@@ -264,6 +266,10 @@ TAX_ASSUMPTION_KEYS = (
     "tax.foundation.rf_interest_rate", "tax.foundation.setup_cost_pln",
     "tax.foundation.annual_admin_cost_pln", "tax.foundation.admin_cost_proration")
 YEAR_FIELDS = ("year", "year_return", "year_is_partial")
+# walk-forward (Q-022): the summary describes the stitched OOS path; empty for other commands
+# (optimization_mode is in-sample for the in-sample optimizer's rows)
+WALK_FORWARD_FIELDS = ("optimization_mode", "walk_forward_window", "train_years", "test_years",
+                       "step_years", "oos_windows", "first_oos_week", "last_oos_week")
 # REP-012 (Q-023): applied_* = parameters the row's profile actually applies; a profile that does
 # not apply a parameter shows 0.0 (amounts) or NOT_APPLICABLE (thresholds, modes). The tax_*
 # columns (TAX_ASSUMPTION_KEYS) are the configured scenario assumptions shared by every profile
@@ -277,7 +283,9 @@ APPLIED_PROFILE_FIELDS = (
     "applied_foundation_admin_cost_proration")
 
 SUMMARY_FIELDS = (
-    ["tax_profile", "spec_version", "run_name", "pre_tax_method",
+    ["tax_profile", "spec_version", "run_name", "pre_tax_method"]
+    + list(WALK_FORWARD_FIELDS)
+    + [
      "requested_start", "requested_end", "effective_first_week", "effective_last_week",
      "inception_date", "elapsed_days", "weeks",
      "initial_capital", "nav_start",
@@ -349,6 +357,9 @@ def summary_row(cfg, res) -> dict:
     row = {
         "spec_version": cfg.get("app.spec_version"), "run_name": cfg.get("report.run_name"),
         "tax_profile": cfg.get("tax.profile"), "pre_tax_method": res.pre_tax.method,
+        **{k: None for k in WALK_FORWARD_FIELDS},
+        "optimization_mode": cfg.get("optimizer.mode") if cfg.command == "optimize" else None,
+        **(getattr(res, "walk_forward", None) or {}),
         "requested_start": cfg.start, "requested_end": cfg.end,
         "effective_first_week": res.engine.weeks[0].week_key,
         "effective_last_week": res.engine.weeks[-1].week_key,

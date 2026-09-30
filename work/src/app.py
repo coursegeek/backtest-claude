@@ -13,8 +13,9 @@ Implemented in this build:
 A run is split into data preparation (``prepare_run``: load, validate and align every source,
 CPI window included) and execution (``run_prepared``: engine, terminal settlement, pre-tax
 shadow, metrics, outputs); execution never reloads or realigns data.
-  * ``optimize``    - in-sample weight-grid optimizer (``optimizer.py``, OPT-001..010, Q-041).
-Everything else (walk-forward, distribution_schedule, foundation internal trading tax > 0)
+  * ``optimize``    - in-sample weight-grid optimizer (``optimizer.py``, OPT-001..010, Q-041)
+                      and walk-forward (``walk_forward.py``, WF-001..016, Q-022).
+Everything else (distribution_schedule, foundation internal trading tax > 0)
 resolves and validates its configuration and then stops with a clear NotImplementedCommand;
 no partial results are produced.
 """
@@ -174,6 +175,9 @@ class PortfolioRunResult:
     inputs: Optional[EngineInputs] = None
     cpi_series: Optional[object] = None
     prepared: Optional["PreparedRun"] = None        # the shared prepared input of this run
+    walk_forward: Optional[dict] = None             # summary fields of a stitched OOS path
+    targets_by_week: Optional[dict] = None          # walk-forward: targets in force per week
+    assets: Optional[tuple] = None                  # walk-forward: union of the OOS assets
 
 
 @dataclass(frozen=True)
@@ -233,6 +237,53 @@ class PreparedRun:
         if all(getattr(self.inputs, k) == v for k, v in strategy.items()):
             return self.inputs
         return dataclasses.replace(self.inputs, **strategy)
+
+    def training_view(self, first_week: dt.date, last_week: dt.date,
+                      cutoff: dt.date) -> "PreparedRun":
+        """Walk-forward training input (Q-022, WF-004, WF-014, META-003): a PreparedRun that
+        physically holds only information known before ``cutoff`` (the OOS test start):
+        retained weeks in [first_week, last_week] (all < cutoff), their WeekMarket records
+        (returns, RF, dividends), signal observations with week_key and available_at before
+        ``cutoff`` (the whole earlier history stays for warm-up/reconstruction), normalized rows
+        and validation issues before ``cutoff``, and no CPI (real metrics are no objective and
+        a later CPI month would be future information)."""
+        if not last_week < cutoff:
+            raise ValueError(f"training window end {last_week} must be before {cutoff}")
+        i = self.inputs
+        weeks = tuple(w for w in i.weeks if first_week <= w <= last_week)
+        if not weeks:
+            raise ValueError(f"empty training window {first_week}..{last_week}")
+        before = lambda k: k is None or k < cutoff                          # noqa: E731
+        series = {a: s.replace_points(tuple(p for p in s.points
+                                            if p.week_key < cutoff and p.available_at < cutoff))
+                  for a, s in i.signal_series.items()}
+        inputs = dataclasses.replace(i, weeks=weeks, market={w: i.market[w] for w in weeks},
+                                     signal_series=series, run_start=weeks[0])
+        cal = self.calendar
+        inside = lambda w: weeks[0] <= w <= weeks[-1]                        # noqa: E731
+        calendar = dataclasses.replace(
+            cal, weeks=weeks, common_gaps=tuple(w for w in cal.common_gaps if inside(w)),
+            dropped=tuple(w for w in cal.dropped if inside(w)),
+            carried=tuple((r, w) for r, w in cal.carried if inside(w)),
+            issues=tuple(x for x in cal.issues if before(x.week_key)))
+        return dataclasses.replace(
+            self, inputs=inputs, issues=tuple(x for x in self.issues if before(x.week_key)),
+            first_week=weeks[0], last_week=weeks[-1], calendar=calendar,
+            normalized=tuple(r for r in self.normalized if r["week_key"] < cutoff
+                             and (r.get("available_at") is None or r["available_at"] < cutoff)),
+            common_range=(self.common_range[0], weeks[-1]), truncations=(),
+            cpi_series=None, cpi_window=None,
+            first_week_rule=f"walk-forward training window {weeks[0]}..{weeks[-1]}")
+
+    def max_information_week(self) -> dt.date:
+        """Latest week of any information held (retained weeks, market records, signal
+        observations and their availability, normalized rows) - the no-lookahead audit."""
+        i = self.inputs
+        keys = list(i.weeks) + list(i.market)
+        for s in i.signal_series.values():
+            keys += [p.week_key for p in s.points] + [p.available_at for p in s.points]
+        keys += [r["week_key"] for r in self.normalized]
+        return max(keys)
 
     def context(self) -> dict:
         """PortfolioRunResult fields shared by every run of this prepared input; the
@@ -502,16 +553,25 @@ def first_warmup_week(returns, start, end, keys: dict, need: dict) -> dt.date:
     raise WarmupError(worst, bisect.bisect_left(keys[worst], end), need[worst], end)
 
 
-def build_hooks(cfg: ResolvedConfig, inception: Optional[dt.date] = None):
+def build_hooks(cfg: ResolvedConfig, inception: Optional[dt.date] = None, *, funding=None,
+                tax_state=None, zero_rates: bool = False):
     """Strategic funding policy (step 3/6) composed with the profile module (steps 0/2/5/6):
-    individual_pl taxes or a foundation (which needs the inception date, Q-034)."""
-    strategic = hooks_from_config(cfg)
+    individual_pl taxes or a foundation (which needs the inception date, Q-034). Walk-forward
+    continuation passes its own ``funding`` policy (boundary rebalance, carried band trigger)
+    and the carried ``tax_state`` (TaxState / FoundationState); ``zero_rates`` builds the
+    pre-tax shadow policy of the profile (Q-015)."""
+    strategic = funding if funding is not None else hooks_from_config(cfg)
     if cfg.get("tax.profile") in FOUNDATION_PROFILES:
         if inception is None:
             raise ConfigError("foundation hooks need the inception date of the run")
-        return ComposedHooks(strategic, FoundationHooks(FoundationParams.from_config(cfg), inception))
+        params = FoundationParams.from_config(cfg)
+        params = params.zero_rates() if zero_rates else params
+        return ComposedHooks(strategic, FoundationHooks(params, inception, tax_state))
     tax = tax_hooks_from_config(cfg)
-    return ComposedHooks(strategic, tax) if tax is not None else strategic
+    if tax is None:
+        return strategic
+    params = tax.params.zero_rates() if zero_rates else tax.params
+    return ComposedHooks(strategic, IndividualTaxHooks(params, tax_state))
 
 
 def find_tax_hooks(hooks):
@@ -586,12 +646,14 @@ def prepare_run(cfg: ResolvedConfig, dividend_mode: Optional[str] = None,
                        cpi_window=window, **ctx)
 
 
-def prepared_input_sha256(prepared: PreparedRun) -> str:
+def prepared_input_sha256(prepared: PreparedRun, include_sources: bool = True) -> str:
     """SHA-256 of the prepared data/calendar input as the engine sees it: retained weeks,
     weekly returns, RF, dividend yields and status, signal price series, first week, as_of,
     dividend mode, common range, dropped weeks, CPI window and the source hashes. Strategy
     parameters (signal parameters, targets, capital, costs, rebalancing band, tax profile) are
-    not part of it: every variant of a scan or tax-compare shares this hash."""
+    not part of it: every variant of a scan or tax-compare shares this hash.
+    ``include_sources=False`` (walk-forward training views) hashes only the content held by the
+    view, not the hashes of the whole source files (which also cover later weeks)."""
     i = prepared.inputs
     cpi = prepared.cpi_window
     payload = {
@@ -606,7 +668,8 @@ def prepared_input_sha256(prepared: PreparedRun) -> str:
         "common_range": [str(x) for x in prepared.common_range],
         "dropped": [w.isoformat() for w in prepared.calendar.dropped],
         "cpi_window": dataclasses.asdict(cpi) if cpi is not None else None,
-        "sources": [[p.role, p.sha256] for p in sorted(prepared.provenances, key=lambda p: p.role)],
+        "sources": [[p.role, p.sha256] for p in sorted(prepared.provenances, key=lambda p: p.role)]
+        if include_sources else None,
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 
@@ -672,23 +735,27 @@ def run_prepared(cfg: ResolvedConfig, prepared: PreparedRun, write: bool = True,
 
 
 def write_portfolio_outputs(cfg: ResolvedConfig, res: PortfolioRunResult,
-                            out_dir: Optional[Path] = None, shared: Optional[dict] = None) -> Path:
+                            out_dir: Optional[Path] = None, shared: Optional[dict] = None,
+                            timestamp=None, extra_manifest: Optional[dict] = None) -> Path:
     """Standard run outputs. ``shared`` (tax-compare): the profile directory ``out_dir`` gets
     the profile's own artifacts; shared data outputs (weekly_normalized.csv) live once in the
-    compare directory and the profile manifest points to the shared manifest (Q-023)."""
-    ts = shared["timestamp"] if shared else run_timestamp()
+    compare directory and the profile manifest points to the shared manifest (Q-023).
+    ``timestamp`` / ``extra_manifest`` (walk-forward): the run timestamp of the enclosing
+    command and additional data_manifest.json entries."""
+    ts = shared["timestamp"] if shared else (timestamp or run_timestamp())
     if out_dir is None:
         out = run_directory(cfg.get("report.output_dir"), cfg.get("report.run_name"), ts)
     else:
         out = Path(out_dir)
         out.mkdir(parents=True, exist_ok=False)
     (out / "config_resolved.yaml").write_text(cfg.to_yaml(res.as_of), encoding="utf-8")
-    assets = canonical_assets(res.engine.pre_start)
+    assets = res.assets if res.assets is not None else canonical_assets(res.engine.pre_start)
     t = res.terminal
     weekly_events = tuple(res.tax_state.tax_events) if res.tax_state else ()
     events = weekly_events + (t.terminal_tax_events if t else ())
     write_csv(out / "weekly_portfolio.csv", weekly_portfolio_fields(assets),
-              weekly_portfolio_rows(res.engine, res.targets, assets, weekly_events))
+              weekly_portfolio_rows(res.engine, res.targets, assets, weekly_events,
+                                    res.targets_by_week))
     write_csv(out / "tax_events.csv", TAX_EVENT_FIELDS, tax_event_rows(events))
     write_csv(out / "realizations.csv", REALIZATION_FIELDS,
               realization_rows(res.engine.realizations)
@@ -763,6 +830,7 @@ def write_portfolio_outputs(cfg: ResolvedConfig, res: PortfolioRunResult,
     })
     if shared:
         manifest.update(shared["profile_manifest"])
+    manifest.update(extra_manifest or {})
     write_json(out / "data_manifest.json", manifest)
     return out
 
@@ -779,6 +847,9 @@ def dispatch(cfg: ResolvedConfig):
     if cmd in ("delay-scan", "threshold-scan", "rebalance-scan"):
         from .scans import run_scan
         return run_scan(cfg)
+    if cmd == "optimize" and cfg.get("optimizer.mode") == "walk-forward":
+        from .walk_forward import run_walk_forward
+        return run_walk_forward(cfg)
     if cmd == "optimize":
         from .optimizer import run_optimize
         return run_optimize(cfg)

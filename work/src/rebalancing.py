@@ -32,6 +32,7 @@ from .calendar import WEEK, is_first_week_of_period
 from .costs import CostModel
 from .engine import AmountsDue, PipelineHooks, WeekContext
 from .errors import ConfigError, InsolvencyError
+from .allocation import risk_off_asset_share
 from .models import RISKY_ASSETS, RebalanceEvent, State, TradeReason, canonical_assets
 from .rf import RF_BASE, reserve_name
 from .sell_to_pay import DueCursor, sell_to_pay
@@ -144,13 +145,29 @@ def plan_rebalance(ledger, targets: dict, due: float, costs: CostModel, shares: 
 
 
 # ============================================================================ execution
+def allocation_shares(effective_states: dict, params: dict) -> dict:
+    """Initial-allocation semantics of the sleeve split (SIG-018): RISK_ON -> 100% asset,
+    RISK_OFF -> asset share 1 - sell_fraction (risk_off_asset_share); used by the walk-forward
+    boundary rebalance so that the new selection's effective state defines the split (Q-022)."""
+    out = {}
+    for a in RISKY_ASSETS:
+        if effective_states.get(a, State.RISK_ON) == State.RISK_OFF:
+            out[a] = risk_off_asset_share(params[a])
+        else:
+            out[a] = 1.0
+    return out
+
+
 def execute_rebalance(pf, ctx: WeekContext, due: AmountsDue, reason: TradeReason, mode: str,
-                      source_week, nominal_week, max_dev=None) -> RebalanceEvent:
+                      source_week, nominal_week, max_dev=None, shares: Optional[dict] = None
+                      ) -> RebalanceEvent:
     """TAX-007 order: plan -> sells -> (reserve releases) -> pay amounts due -> buys
-    (-> reserve top-ups). Trades settle against rf_base; RF moves are cost-free transfers."""
+    (-> reserve top-ups). Trades settle against rf_base; RF moves are cost-free transfers.
+    ``shares`` overrides the REB-009 asset shares (walk-forward boundary)."""
     week = ctx.week
     before = pf.ledger
-    shares = asset_shares(before, ctx.effective_states, ctx.params)
+    if shares is None:
+        shares = asset_shares(before, ctx.effective_states, ctx.params)
     plan = plan_rebalance(before, ctx.targets, due.total, pf.costs, shares, week)
     dust = DUST_REL * max(1.0, plan.nav_after_signal)
     n_trades = len(pf.trades)
@@ -189,12 +206,13 @@ class StrategicHooks(PipelineHooks):
     """Step 3: strategic rebalance (calendar or band trigger) or, without a trigger,
     sell_to_pay for positive amounts due. Step 6: band trigger detection."""
 
-    def __init__(self, mode: str = "signal-only", band_pp: Optional[float] = None):
+    def __init__(self, mode: str = "signal-only", band_pp: Optional[float] = None,
+                 pending: Optional[tuple] = None):
         self.mode = normalize_mode(mode)
         if self.mode == "band" and not (band_pp and band_pp > 0):
             raise ConfigError("band rebalancing requires portfolio.rebalance_band_pp > 0")
         self.band_pp = band_pp
-        self.pending = None           # (source_week, nominal_week, max_dev)
+        self.pending = pending        # (source_week, nominal_week, max_dev); carried by walk-forward
 
     def rebalance_or_fund(self, ctx: WeekContext, portfolio, due: AmountsDue) -> None:
         if calendar_trigger(self.mode, ctx.prev_week, ctx.week):
@@ -216,6 +234,37 @@ class StrategicHooks(PipelineHooks):
             self.pending = (ctx.week, ctx.week + WEEK, dev)
 
 
-def hooks_from_config(cfg) -> StrategicHooks:
+class BoundaryRebalanceHooks(PipelineHooks):
+    """Walk-forward boundary (Q-022, WF-013): in the first week of a new OOS segment, when the
+    boundary requires it, step 3 is one cost-aware ``walk_forward_rebalance`` to the new
+    selection's targets with the initial-allocation split of the effective signal states, paying
+    the week's amounts due from the same plan (TAX-007); every other week (and a boundary that
+    needs no rebalance) is handled by the wrapped strategic policy."""
+
+    def __init__(self, strategic: StrategicHooks, boundary_week: dt.date, force: bool):
+        self.strategic = strategic
+        self.boundary_week = boundary_week
+        self.force = force
+        self.event = None
+
+    @property
+    def pending(self):
+        return self.strategic.pending
+
+    def rebalance_or_fund(self, ctx: WeekContext, portfolio, due: AmountsDue) -> None:
+        if self.force and ctx.week == self.boundary_week:
+            self.force = False
+            self.event = execute_rebalance(
+                portfolio, ctx, due, TradeReason.WALK_FORWARD_REBALANCE, "walk_forward", ctx.week,
+                ctx.week, shares=allocation_shares(ctx.effective_states, ctx.params))
+        else:
+            self.strategic.rebalance_or_fund(ctx, portfolio, due)
+
+    def end_of_week(self, ctx: WeekContext, portfolio) -> None:
+        self.strategic.end_of_week(ctx, portfolio)
+
+
+def hooks_from_config(cfg, pending: Optional[tuple] = None) -> StrategicHooks:
     band = cfg.get("portfolio.rebalance_band_pp")
-    return StrategicHooks(cfg.get("portfolio.rebalance"), float(band) if band is not None else None)
+    return StrategicHooks(cfg.get("portfolio.rebalance"), float(band) if band is not None else None,
+                          pending)
