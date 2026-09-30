@@ -1,13 +1,19 @@
 """Command implementations behind the CLI and the import API.
 
 Implemented in this build:
-  * ``signals`` - signal-only analysis (NORM-012/NORM-020);
-  * ``run``     - portfolio backtest with tax.profile none or individual_pl and every
-                  portfolio.rebalance mode (signal-only, weekly, monthly, quarterly,
-                  annually/yearly, band); annual taxes of closed years, dividend and RF taxes.
-Everything else (foundation profiles, terminal settlement, metrics/summary, scans, optimize,
-tax-compare, walk-forward) resolves and validates its configuration and then stops with a
-clear NotImplementedCommand; no partial results are produced.
+  * ``signals``     - signal-only analysis (NORM-012/NORM-020);
+  * ``run``         - portfolio backtest for every tax.profile (none, individual_pl,
+                      family_foundation_15/19 with tax_event=terminal) and every
+                      portfolio.rebalance mode, with terminal settlement, pre-tax shadow run,
+                      metrics and summary.csv;
+  * ``tax-compare`` - orchestration of the run pipeline for several tax profiles on one shared
+                      prepared input (``tax_compare.py``, TAX-003, FND-008, Q-023).
+A run is split into data preparation (``prepare_run``: load, validate and align every source,
+CPI window included) and execution (``run_prepared``: engine, terminal settlement, pre-tax
+shadow, metrics, outputs); execution never reloads or realigns data.
+Everything else (scans, optimize, walk-forward, distribution_schedule, foundation internal
+trading tax > 0) resolves and validates its configuration and then stops with a clear
+NotImplementedCommand; no partial results are produced.
 """
 from __future__ import annotations
 
@@ -161,6 +167,47 @@ class PortfolioRunResult:
     metrics: Optional[RunMetrics] = None
     inputs: Optional[EngineInputs] = None
     cpi_series: Optional[object] = None
+    prepared: Optional["PreparedRun"] = None        # the shared prepared input of this run
+
+
+@dataclass(frozen=True)
+class PreparedRun:
+    """Everything a portfolio run derives from data, prepared once (NORM-011, NORM-019, Q-015,
+    Q-023): aligned EngineInputs (immutable), calendar, dropped weeks, common range, dividend
+    observations/status, CPI window, provenances and the shared validation issues. The run
+    pipeline (``run_prepared``) never reloads or realigns data; ``tax-compare`` passes the same
+    object to every profile."""
+    inputs: EngineInputs
+    issues: tuple                   # shared validation issues (data, calendar, dividends, CPI)
+    provenances: tuple              # every loaded source (CPI included when available)
+    first_week: dt.date
+    last_week: dt.date
+    as_of: dt.date
+    targets: dict
+    dropped_incomplete_weeks: int
+    calendar: object
+    normalized: tuple
+    dividend_mode: str              # dividend data carried by ``inputs``: none|smoothed_weekly|exact
+    common_range: tuple
+    truncations: tuple
+    cpi_series: Optional[object] = None
+    cpi_window: Optional[object] = None
+
+    @property
+    def inception(self) -> dt.date:
+        return inception_date(self.first_week)
+
+    def context(self) -> dict:
+        """PortfolioRunResult fields shared by every run of this prepared input; the
+        validation report is a fresh object (shared issues + the run's own engine issues)."""
+        report = ValidationReport()
+        report.extend(self.issues)
+        return dict(report=report, provenances=self.provenances, first_week=self.first_week,
+                    last_week=self.last_week, as_of=self.as_of, targets=self.targets,
+                    dropped_incomplete_weeks=self.dropped_incomplete_weeks,
+                    calendar=self.calendar, normalized=self.normalized,
+                    dividend_mode=self.dividend_mode, common_range=self.common_range,
+                    truncations=self.truncations)
 
 
 @dataclass(frozen=True)
@@ -247,9 +294,11 @@ def dividend_status_issues(cfg, weeks, div) -> list:
             for a, b in blocks]
 
 
-def build_run(cfg: ResolvedConfig):
+def build_run(cfg: ResolvedConfig, dividend_mode: Optional[str] = None):
     """Load, validate and align every source of a portfolio run; returns EngineInputs and
-    the run context (NORM-011, NORM-019, Q-012, Q-014)."""
+    the run context (NORM-011, NORM-019, Q-012, Q-014). ``dividend_mode`` overrides the data
+    requirement of the configured profile: ``tax-compare`` passes the superset requirement of
+    all compared profiles so that every profile shares one calendar (Q-023)."""
     check_supported_run(cfg)
     targets = strategic_targets(cfg)
     assets = active_risky_assets(targets)
@@ -273,7 +322,7 @@ def build_run(cfg: ResolvedConfig):
             raise ConfigError(f"{a}: not enough price history")
         # price-based return sources need a previous price for their first return week
         ranges[SIGNAL_ROLE[a]] = (keys[0] if a == "stocks" else keys[1], keys[-1])
-    div_mode = dividend_mode_of(cfg, assets)
+    div_mode = dividend_mode_of(cfg, assets) if dividend_mode is None else dividend_mode
     div_series, div_points = (None, [])
     if div_mode != "none":
         div_series, div_points = load_dividend_input(cfg, div_mode, report)
@@ -449,9 +498,40 @@ def load_cpi_window(cfg: ResolvedConfig, inception, last_week, report):
     return cpi, window
 
 
+def prepare_run(cfg: ResolvedConfig, dividend_mode: Optional[str] = None) -> PreparedRun:
+    """Data preparation of a portfolio run: sources, calendar, EngineInputs and the CPI window
+    of the retained range (REAL-001..004). ``dividend_mode`` - see ``build_run``."""
+    inputs, ctx = build_run(cfg, dividend_mode)
+    report = ctx.pop("report")
+    cpi, window = load_cpi_window(cfg, inception_date(ctx["first_week"]), inputs.weeks[-1], report)
+    if cpi is not None:
+        ctx["provenances"] += (cpi.provenance,)
+    return PreparedRun(inputs=inputs, issues=tuple(report.issues), cpi_series=cpi,
+                       cpi_window=window, **ctx)
+
+
+def check_prepared_for(cfg: ResolvedConfig, prepared: PreparedRun) -> None:
+    """A profile may only run on a prepared input that carries the data it needs."""
+    need = dividend_mode_of(cfg, canonical_assets(prepared.inputs.params))
+    if need != "none" and need != prepared.dividend_mode:
+        raise ConfigError(f"tax.profile={cfg.get('tax.profile')} needs dividend data "
+                          f"({need}) but the prepared input carries {prepared.dividend_mode}")
+
+
 def run_portfolio(cfg: ResolvedConfig, write: bool = True, hooks=None) -> PortfolioRunResult:
-    inputs, ctx = build_run(cfg)
-    inception = inception_date(ctx["first_week"])
+    return run_prepared(cfg, prepare_run(cfg), write=write, hooks=hooks)
+
+
+def run_prepared(cfg: ResolvedConfig, prepared: PreparedRun, write: bool = True, hooks=None,
+                 out_dir: Optional[Path] = None, shared: Optional[dict] = None) -> PortfolioRunResult:
+    """The production run pipeline on an already prepared input: central engine + funding /
+    rebalancing hooks + profile tax/foundation hooks, terminal settlement, pre-tax shadow run,
+    metrics and (optionally) the standard outputs."""
+    check_supported_run(cfg)
+    check_prepared_for(cfg, prepared)
+    inputs = prepared.inputs
+    ctx = prepared.context()
+    inception = prepared.inception
     hooks = hooks if hooks is not None else build_hooks(cfg, inception)
     result = run_engine(inputs, hooks)
     ctx["report"].extend(result.issues)
@@ -467,10 +547,7 @@ def run_portfolio(cfg: ResolvedConfig, write: bool = True, hooks=None) -> Portfo
     else:
         terminal = None
     pre_tax = run_pre_tax(cfg, inputs, result, tax)
-    first, last = ctx["first_week"], result.weeks[-1].week_key
-    cpi, window = load_cpi_window(cfg, inception_date(first), last, ctx["report"])
-    if cpi is not None:
-        ctx["provenances"] += (cpi.provenance,)
+    first, last = prepared.first_week, result.weeks[-1].week_key
     metrics = compute_run_metrics(
         pre=PathSeries.from_engine(pre_tax.engine), after=PathSeries.from_engine(result),
         elapsed_days=elapsed_days(first, last), rf_returns=[w.market.rf_return for w in result.weeks],
@@ -481,19 +558,28 @@ def run_portfolio(cfg: ResolvedConfig, write: bool = True, hooks=None) -> Portfo
         trades=result.trades, terminal_trades=terminal.liquidation_trades if terminal else (),
         week_states=[w.effective_states for w in result.weeks],
         assets=canonical_assets(inputs.params), mar_annual=float(cfg.get("metrics.sortino_mar_annual")),
-        cpi=window, growth_base_nav=initial_capital,          # Q-033: before the setup cost
+        cpi=prepared.cpi_window, growth_base_nav=initial_capital,   # Q-033: before the setup cost
         final_wealth_pre_tax=pre_tax.final_wealth)
     out = PortfolioRunResult(engine=result, **ctx, tax_state=tax.state if tax else None,
                              tax_params=tax.params if tax else None, terminal=terminal,
-                             pre_tax=pre_tax, metrics=metrics, inputs=inputs, cpi_series=cpi)
+                             pre_tax=pre_tax, metrics=metrics, inputs=inputs,
+                             cpi_series=prepared.cpi_series, prepared=prepared)
     if write:
-        out.output_dir = write_portfolio_outputs(cfg, out)
+        out.output_dir = write_portfolio_outputs(cfg, out, out_dir=out_dir, shared=shared)
     return out
 
 
-def write_portfolio_outputs(cfg: ResolvedConfig, res: PortfolioRunResult) -> Path:
-    ts = run_timestamp()
-    out = run_directory(cfg.get("report.output_dir"), cfg.get("report.run_name"), ts)
+def write_portfolio_outputs(cfg: ResolvedConfig, res: PortfolioRunResult,
+                            out_dir: Optional[Path] = None, shared: Optional[dict] = None) -> Path:
+    """Standard run outputs. ``shared`` (tax-compare): the profile directory ``out_dir`` gets
+    the profile's own artifacts; shared data outputs (weekly_normalized.csv) live once in the
+    compare directory and the profile manifest points to the shared manifest (Q-023)."""
+    ts = shared["timestamp"] if shared else run_timestamp()
+    if out_dir is None:
+        out = run_directory(cfg.get("report.output_dir"), cfg.get("report.run_name"), ts)
+    else:
+        out = Path(out_dir)
+        out.mkdir(parents=True, exist_ok=False)
     (out / "config_resolved.yaml").write_text(cfg.to_yaml(res.as_of), encoding="utf-8")
     assets = canonical_assets(res.engine.pre_start)
     t = res.terminal
@@ -521,8 +607,14 @@ def write_portfolio_outputs(cfg: ResolvedConfig, res: PortfolioRunResult) -> Pat
               rebalance_rows(res.engine.rebalance_events))
     write_csv(out / "signals.csv", SIGNAL_FIELDS, signal_rows(res.engine.signal_records))
     write_csv(out / "validation_report.csv", VALIDATION_FIELDS, res.report.rows())
-    write_csv(out / "weekly_normalized.csv", NORMALIZED_FIELDS, res.normalized)
+    if not shared:
+        write_csv(out / "weekly_normalized.csv", NORMALIZED_FIELDS, res.normalized)
     tax_doc = {"tax_profile": cfg.get("tax.profile"), "dividend_mode": res.dividend_mode}
+    if res.tax_state is None and res.dividend_mode != "none":
+        tax_doc["dividend_note"] = (
+            "dividend data carried by the shared prepared input (common tax-compare calendar, "
+            "Q-023); tax.profile=none withholds no dividend tax: gross dividends are reinvested "
+            "(Q-016), no tax events exist")
     if res.tax_state is not None:
         tax_doc.update({"parameters": dataclasses.asdict(res.tax_params),
                         "before_terminal": res.tax_state.to_dict(),
@@ -567,6 +659,8 @@ def write_portfolio_outputs(cfg: ResolvedConfig, res: PortfolioRunResult) -> Pat
         "pre_tax_note": res.pre_tax.note,
         "not_implemented_outputs": ["rolling_metrics.csv (MET-022/023, SHOULD)"],
     })
+    if shared:
+        manifest.update(shared["profile_manifest"])
     write_json(out / "data_manifest.json", manifest)
     return out
 
@@ -577,12 +671,14 @@ def dispatch(cfg: ResolvedConfig):
         return run_signals(cfg)
     if cmd == "run":
         return run_portfolio(cfg)
+    if cmd == "tax-compare":
+        from .tax_compare import run_tax_compare
+        return run_tax_compare(cfg)
     if cmd in ("delay-scan", "threshold-scan"):
         if not cfg.get("run.asset"):
             raise ConfigError(f"{cmd} requires --asset stocks|gold|btc (ALLOC-002)")
-    elif cmd in ("tax-compare", "rebalance-scan"):
+    elif cmd == "rebalance-scan":
         strategic_targets(cfg)          # ALLOC-001: fail early without explicit targets
     raise NotImplementedCommand(
-        f"command '{cmd}': configuration resolved and validated, but the portfolio engine is "
-        "not implemented in this build yet; use 'run' (tax.profile none|individual_pl), "
-        "'signals' or --print-config")
+        f"command '{cmd}': configuration resolved and validated, but this command is not "
+        "implemented in this build yet; use 'run', 'tax-compare', 'signals' or --print-config")

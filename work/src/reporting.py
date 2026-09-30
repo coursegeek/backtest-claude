@@ -246,6 +246,8 @@ def weekly_portfolio_rows(result, targets, assets, tax_events=()) -> list:
 # ============================================================================ summary.csv
 # REP-002, REP-012, REP-017, REP-018, MET-001..021: one wide row per run, stable column order,
 # no timestamp (the run timestamp stays in the run directory name and data_manifest.json).
+# tax-compare writes one row per profile with the same schema; tax_profile is the first column
+# (the key of the comparison, TAX-003/FND-008).
 SIGNAL_PARAM_FIELDS = ("ma", "threshold_off", "threshold_on", "confirm_off", "confirm_on", "delay",
                        "sell_fraction", "risk_off_action")
 TAX_ASSUMPTION_KEYS = (
@@ -262,9 +264,20 @@ TAX_ASSUMPTION_KEYS = (
     "tax.foundation.rf_interest_rate", "tax.foundation.setup_cost_pln",
     "tax.foundation.annual_admin_cost_pln", "tax.foundation.admin_cost_proration")
 YEAR_FIELDS = ("year", "year_return", "year_is_partial")
+# REP-012 (Q-023): applied_* = parameters the row's profile actually applies; a profile that does
+# not apply a parameter shows 0.0 (amounts) or NOT_APPLICABLE (thresholds, modes). The tax_*
+# columns (TAX_ASSUMPTION_KEYS) are the configured scenario assumptions shared by every profile
+# of a run or tax-compare, not the active taxes of the row.
+NOT_APPLICABLE = "not_applicable"
+APPLIED_PROFILE_FIELDS = (
+    "applied_solidarity_threshold_pln", "applied_external_solidarity_base_pln",
+    "applied_loss_carryforward_years", "applied_loss_offset_fraction",
+    "applied_foundation_tax_event", "applied_distribution_tax_base",
+    "applied_foundation_setup_cost_pln", "applied_foundation_annual_admin_cost_pln",
+    "applied_foundation_admin_cost_proration")
 
 SUMMARY_FIELDS = (
-    ["spec_version", "run_name", "tax_profile", "pre_tax_method",
+    ["tax_profile", "spec_version", "run_name", "pre_tax_method",
      "requested_start", "requested_end", "effective_first_week", "effective_last_week",
      "inception_date", "elapsed_days", "weeks",
      "initial_capital", "nav_start",
@@ -296,7 +309,28 @@ SUMMARY_FIELDS = (
     + [f"signal_{a}_{f}" for a in ("stocks", "gold", "btc") for f in SIGNAL_PARAM_FIELDS]
     + ["applied_dividend_tax_rate", "applied_capital_gains_rate", "applied_solidarity_rate",
        "applied_rf_interest_rate", "applied_distribution_rate", "applied_internal_trading_tax_rate"]
+    + list(APPLIED_PROFILE_FIELDS)
     + [k.replace(".", "_") for k in TAX_ASSUMPTION_KEYS])
+
+
+def applied_profile_cells(params) -> dict:
+    """APPLIED_PROFILE_FIELDS of one row (params: TaxParams | FoundationParams | None)."""
+    individual = params is not None and hasattr(params, "solidarity_threshold_pln")
+    foundation = params is not None and hasattr(params, "distribution_rate")
+    na = NOT_APPLICABLE
+    return {
+        "applied_solidarity_threshold_pln": params.solidarity_threshold_pln if individual else na,
+        "applied_external_solidarity_base_pln": (params.external_solidarity_base_pln if individual
+                                                 else na),
+        "applied_loss_carryforward_years": params.loss_carryforward_years if individual else na,
+        "applied_loss_offset_fraction": params.loss_offset_fraction if individual else na,
+        "applied_foundation_tax_event": params.tax_event if foundation else na,
+        "applied_distribution_tax_base": params.distribution_tax_base if foundation else na,
+        "applied_foundation_setup_cost_pln": params.setup_cost_pln if foundation else 0.0,
+        "applied_foundation_annual_admin_cost_pln": (params.annual_admin_cost_pln if foundation
+                                                     else 0.0),
+        "applied_foundation_admin_cost_proration": params.admin_cost_proration if foundation else na,
+    }
 
 
 def _year_cells(prefix, y) -> dict:
@@ -391,6 +425,7 @@ def summary_row(cfg, res) -> dict:
                 "applied_distribution_rate": params.distribution_rate if foundation else 0.0,
                 "applied_internal_trading_tax_rate": params.internal_trading_tax_rate if foundation
                 else 0.0})
+    row.update(applied_profile_cells(params))
     for k in TAX_ASSUMPTION_KEYS:
         row[k.replace(".", "_")] = cfg.get(k)
     unknown = set(row) - set(SUMMARY_FIELDS)

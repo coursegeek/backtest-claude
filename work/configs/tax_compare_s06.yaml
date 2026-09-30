@@ -1,0 +1,28 @@
+# S06 tax-compare - clean-room V2 scenario config (Q-023, CLI-006).
+# Frozen by V2 from the values supplied in the session brief; not derived from any V1 config.
+# No single tax.profile: the profile axis is given by --tax-profile (tax.compare_profiles).
+# Signal parameters are the specification defaults (DEF-*, signals.<asset>.*).
+run:
+  start: 2018-01-01
+  end: 2026-07-31
+  as_of_date: 2026-09-29
+
+portfolio:
+  initial_capital_pln: 1000000
+  rebalance: band
+  rebalance_band_pp: 1
+  transaction_cost_bps: 0
+  slippage_bps: 0
+
+allocation:
+  targets:
+    stocks: 0.60
+    gold: 0.20
+    btc: 0.20
+    rf: 0.00
+
+tax:
+  dividend_tax_mode: smoothed_weekly
+  foundation:
+    tax_event: terminal
+    distribution_tax_base: distributed_amount

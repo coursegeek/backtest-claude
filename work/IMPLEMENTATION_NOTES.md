@@ -2,17 +2,19 @@
 
 Stan: **wszystkie cztery profile podatkowe (none, individual_pl, family_foundation_15/19 z
 tax_event=terminal) w centralnym pipeline + terminal settlement + pre-tax shadow run + metryki +
-summary.csv** (sesja 8). Zaimplementowane: CLI i API importu, konfiguracja, modele, kalendarz,
-dostępność informacji, loadery z normalizacją kanoniczną, walidacja (semantyka luk Q-012),
-pipeline sygnałów, ledger, koszty transakcyjne, cost basis (lots), centralny tygodniowy engine
-PORT-011, rebalancing `signal-only/weekly/monthly/quarterly/annually(yearly)/band`, sell_to_pay
-(TAX-006), finansowanie należności przy rebalancingu (TAX-007), moduł podatkowy `individual_pl`
-(`src/tax.py`), moduł fundacji (`src/foundation.py`), terminal settlement (`src/settlement.py`),
-pre-tax shadow run (Q-015), moduł metryk (`src/metrics.py`) i `summary.csv`.
+summary.csv** (sesja 8) **oraz komenda `tax-compare`** (sesja 9). Zaimplementowane: CLI i API
+importu, konfiguracja, modele, kalendarz, dostępność informacji, loadery z normalizacją
+kanoniczną, walidacja (semantyka luk Q-012), pipeline sygnałów, ledger, koszty transakcyjne, cost
+basis (lots), centralny tygodniowy engine PORT-011, rebalancing
+`signal-only/weekly/monthly/quarterly/annually(yearly)/band`, sell_to_pay (TAX-006), finansowanie
+należności przy rebalancingu (TAX-007), moduł podatkowy `individual_pl` (`src/tax.py`), moduł
+fundacji (`src/foundation.py`), terminal settlement (`src/settlement.py`), pre-tax shadow run
+(Q-015), moduł metryk (`src/metrics.py`), `summary.csv` i orkiestrator `tax-compare`
+(`src/tax_compare.py`).
 Nie ma jeszcze: `tax.foundation.tax_event=distribution_schedule` (Q-037, jawny błąd),
 niezerowego internal trading tax fundacji (Q-047, jawny błąd), rolling_metrics.csv
-(MET-022/023, SHOULD), scanów, optimize, tax-compare, walk-forward. Te tryby kończą się kodem 3
-z jawnym komunikatem (bez częściowych wyników).
+(MET-022/023, SHOULD), scanów (delay/threshold/rebalance), optimize, walk-forward. Te tryby
+kończą się kodem 3 z jawnym komunikatem (bez częściowych wyników).
 
 Źródło prawdy dla statusów: `compliance_matrix.csv`; pytania: `implementation_questions.csv`.
 
@@ -28,6 +30,8 @@ python work/backtest.py run --weights stocks=0.6,gold=0.2,btc=0.2 --rebalance ba
        --rebalance-band-pp 1 --start 2018-01-01 --end 2026-07-31      # S07 / CLI-009
 python work/backtest.py run --weights stocks=0.6,gold=0.2,btc=0.2 --tax-profile individual_pl \
        --rebalance band --rebalance-band-pp 1 --start 2018-01-01 --end 2026-07-31
+python work/backtest.py tax-compare --config work/configs/tax_compare_s06.yaml \
+       --tax-profile none,individual_pl,family_foundation_15,family_foundation_19   # S06 / CLI-006
 python work/tools/check_audit_consistency.py --allow-pass
 ```
 
@@ -36,7 +40,8 @@ python work/tools/check_audit_consistency.py --allow-pass
 `work/backtest.py` (CLI + fasada importu) → `src/cli.py` → `src/app.py` (komendy).
 Warstwy: `models`, `errors`, `config`, `calendar`, `availability`, `data_loader`, `validation`,
 `signals`, `confirmation`, `scheduling`, `signal_analysis`, `allocation`, `rf`, `costs`,
-`cost_basis`, `ledger`, `engine`, `rebalancing`, `sell_to_pay`, `tax`, `manifest`, `reporting`. `src` jest pakietem importowanym jako `src.*` (Q-044).
+`cost_basis`, `ledger`, `engine`, `rebalancing`, `sell_to_pay`, `tax`, `foundation`, `settlement`,
+`metrics`, `manifest`, `reporting`, `tax_compare` (orkiestrator nad `app.prepare_run` / `app.run_prepared`). `src` jest pakietem importowanym jako `src.*` (Q-044).
 
 ## Decyzje implementacyjne
 
@@ -441,3 +446,59 @@ Warstwy: `models`, `errors`, `config`, `calendar`, `availability`, `data_loader`
     fundacja 15%: podatek 203 841.33 -> 1 155 100.90 (gain_only: podstawa 318 942.23, podatek
     47 841.33); fundacja 19%: 258 199.02 -> 1 100 743.21 (gain_only 60 599.02); shadow: NAV
     tygodniowy 1 405 266.86 - koszt admin 39 890.41 z rf_base = final_wealth_pre_tax 1 365 376.44.
+
+## tax-compare (sesja 9)
+
+67. **Q-023 (RESOLVED)**: tax-compare jest pełnym portfolio runem - ALLOC-001 obowiązuje, wagi
+    tylko z `--config` (allocation.targets) albo `--weights`; brak ukrytych wag i dat. Clean-room
+    nie używa configów V1 (`configs/portfolio.yaml` z przykładu CLI-006 nie istnieje -> błąd
+    "config file not found"). S06 ma zamrożony config V2 `work/configs/tax_compare_s06.yaml`
+    (bez pojedynczego `tax.profile`); `AB_SCENARIOS.csv` S06 wskazuje ten config. Pojedynczy
+    `tax.profile` w pliku configu tax-compare jest jawnym błędem (oś profilu to
+    `--tax-profile` / `tax.compare_profiles`).
+68. **Podział runu**: `app.prepare_run(cfg, dividend_mode)` ładuje, waliduje i wyrównuje dane raz
+    (`PreparedRun`: niemutowalny `EngineInputs`, kalendarz, dropped weeks, zakres wspólny,
+    obserwacje/status dywidend, okno CPI, proweniencja, wspólne issues walidacji, as_of);
+    `app.run_prepared(cfg, prepared)` to produkcyjna ścieżka (engine + funding/rebalancing hooks
+    + hooki profilu + terminal settlement + shadow pre-tax + metryki + wyjścia) bez ponownego
+    ładowania. `run` = `run_prepared(cfg, prepare_run(cfg))`; wyniki normalnego `run` bez zmian
+    (bajtowo identyczne pliki, poza nowymi kolumnami summary).
+69. **Wspólny eksperyment**: lista profili walidowana (dozwolone wartości, bez duplikatów, >= 1),
+    kolejność kanoniczna none, individual_pl, family_foundation_15, family_foundation_19
+    (niezależnie od kolejności wejścia; wejście zapisane w manifeście). Config każdego profilu
+    to nowy `ResolvedConfig` różniący się wyłącznie `tax.profile` (test porównuje rozwiązane
+    configi). Wymagania danych profili są łączone (superset): jeśli choć jeden profil wymaga
+    pliku dywidend, plik wchodzi do wspólnego kalendarza, więc także `none` ma ten sam
+    effective_first_week / effective_last_week / weeks / dropped weeks. `none` na tym wejściu
+    reinwestuje dywidendy brutto (Q-016, stawka 0) bez zdarzeń podatkowych. Samo `none` (bez
+    innych profili) zachowuje własny, dłuższy kalendarz - jak `run`.
+70. **Wyjścia**: `summary.csv` (wiersz na profil, dokładnie `SUMMARY_FIELDS` runu; `tax_profile`
+    jest teraz pierwszą kolumną także w `run`), `tax_compare_manifest.json` (profile, shared_input,
+    prepared_input_sha256 - hash wejścia widzianego przez engine, zakres, dropped weeks, źródła
+    z SHA256, as_of, SHA configu i rozwiązanych parametrów strategii, kontrole wspólnego
+    eksperymentu), wspólne `data_manifest.json`, `config_resolved.yaml` (bez pojedynczego
+    tax.profile), `validation_report.csv`, `weekly_normalized.csv` oraz `profiles/<profil>/`
+    ze standardowymi artefaktami runu; manifest profilu powtarza współdzielone hashe i wskazuje
+    manifest wspólny (dane nie były ładowane ponownie).
+71. **REP-012**: kolumny `applied_*` pokazują parametry faktycznie stosowane przez profil wiersza
+    (stawki, próg i baza daniny, carry-forward, zdarzenie/podstawa podatku fundacji, setup i
+    admin cost, proration; 0.0 lub `not_applicable` gdy profil ich nie stosuje); kolumny `tax_*`
+    to skonfigurowane założenia scenariusza, identyczne w każdym wierszu.
+72. **Inwarianty**: none.final_wealth_pre_tax == individual_pl.final_wealth_pre_tax (shadow
+    individual bez podatków i bez kosztów fundacji = faktyczna ścieżka none);
+    foundation_15.final_wealth_pre_tax == foundation_19.final_wealth_pre_tax; ścieżka tygodniowa
+    15 == 19 (tygodnie, ledgery, transakcje, płatności, transfery, rebalancing, dywidendy,
+    zdarzenia podatkowe/kosztowe, pre_terminal_nav). Nie oczekujemy none pre-tax == fundacja
+    pre-tax (setup/admin cost także w shadow). Kontrole zapisane w manifeście (bez rankingu).
+73. **Atomowość**: wszystkie configi profili walidowane przed ładowaniem danych (Q-037, Q-047,
+    ALLOC-001); błąd profilu w trakcie runu (np. insolvency) przerywa komendę jako
+    `TaxCompareError` z nazwą profilu i kodem wyjścia przyczyny; wyniki zapisywane dopiero po
+    policzeniu wszystkich profili, a błąd zapisu usuwa katalog wyniku.
+74. **Brak oceny**: komenda nie tworzy rankingu, zwycięzcy ani rekomendacji - tylko liczby
+    profili obok siebie.
+75. **Frozen S06 (staged data, walidacja mechaniki - Q-002/Q-004/Q-008 bez zmian)**:
+    2018-01-05..2026-06-26 (443 tygodnie, inception 2017-12-29; koniec obcięty przez plik
+    dywidend i wspólny zakres), wszystkie profile na tym samym kalendarzu; final_wealth_pre_tax
+    none = individual_pl = 3 999 110.48, fundacje 15/19 = 3 114 471.16; after_tax_terminal_wealth:
+    none 3 999 110.48, individual_pl 3 251 509.53, fundacja 15% 2 615 887.69, fundacja 19%
+    2 492 787.09.

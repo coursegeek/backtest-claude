@@ -103,6 +103,10 @@ COMMAND_DEFAULTS: dict = {
     "delay-scan": {"optimizer": {"delay_grid": [1, 2, 3, 4]}},                       # DELAY-002
     "threshold-scan": {"optimizer": {"threshold_grid": [0.01, 0.02, 0.03, 0.04, 0.05],  # THR-002
                                      "delay_grid": [1]}},                              # THR-003
+    # TAX-003/FND-008 (Q-023): the profile axis of tax-compare; both foundations side by side
+    "tax-compare": {"tax": {"compare_profiles": ["none", "individual_pl", "family_foundation_15",
+                                                 "family_foundation_19"]},
+                    "report": {"run_name": "tax_compare"}},
 }
 
 ENUMS = {
@@ -363,6 +367,8 @@ class ResolvedConfig:
     # -- output
     def resolved_dict(self, as_of: Optional[dt.date] = None) -> dict:
         d = copy.deepcopy(self.data)
+        if self.command == "tax-compare" and self.source_of("tax.profile") == "defaults":
+            del d["tax"]["profile"]         # the profile axis is tax.compare_profiles (Q-023)
         if as_of is not None:
             set_path(d, "run.as_of_date", as_of.isoformat())
         d["config"] = {"precedence": "CLI > config > defaults", "file": self.config_path,

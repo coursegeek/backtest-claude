@@ -108,7 +108,7 @@ requirement ID; mapa wymaganie → test jest w `work/compliance_matrix.csv` (kol
 ## 4. Testy integracyjne (tests/integration)
 
 * `test_cli.py`: CLI-001..011 (na fixture'ach lub danych staged z markerem `realdata`), w tym
-  oczekiwane błędy: CLI-007 bez wag (Q-024), CLI-011 na danych staged (Q-020), S06 bez wag (Q-023).
+  oczekiwane błędy: CLI-007 bez wag (Q-024), CLI-011 na danych staged (Q-020), S06 bez wag (Q-023; sesja 9: S06 używa zamrożonego configu V2, `tax-compare` bez wag nadal daje ALLOC-001).
 * `test_outputs.py`: schematy wszystkich plików wyjściowych, roundtrip `config_resolved.yaml`,
   pola `data_manifest.json`, `validation_report.csv`, typy zdarzeń podatkowych, `weekly_normalized.csv`.
 * `test_data_resolution.py`: rozwiązywanie domyślnych plików przez aliasy z raportem (Q-001).

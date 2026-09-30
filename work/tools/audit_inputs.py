@@ -736,6 +736,22 @@ def scenario_rows(sources, as_of):
                 i += 1
         notes, issues = [], []
         weights = {}
+        cfg_path = ROOT / opts["config"] if "config" in opts else None
+        if cfg_path is not None and cfg_path.is_file() and (ROOT / "work" / "configs") in cfg_path.parents:
+            # Q-023: V2-owned scenario config (never a V1 config): weights, dates, dividend mode
+            import yaml
+            conf = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+            run_c = conf.get("run", {}) or {}
+            for key in ("start", "end"):
+                if run_c.get(key) is not None and key not in opts:
+                    opts[key] = str(run_c[key])
+            targets = (conf.get("allocation", {}) or {}).get("targets") or {}
+            if targets and "weights" not in opts:
+                opts["weights"] = ",".join(f"{k}={v}" for k, v in targets.items())
+            mode = (conf.get("tax", {}) or {}).get("dividend_tax_mode")
+            if mode and "dividend-tax-mode" not in opts:
+                opts["dividend-tax-mode"] = mode
+            notes.append(f"weights/dates from V2-owned config {opts['config']} (Q-023)")
         if "weights" in opts:
             for kv in opts["weights"].split(","):
                 k, v = kv.split("=")

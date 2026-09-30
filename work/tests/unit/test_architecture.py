@@ -72,3 +72,17 @@ def test_foundation_module_boundaries():
     assert "LossBucket" not in text and "close_tax_year" not in text
     for mod in ("engine", "tax", "rebalancing", "sell_to_pay", "ledger"):
         assert "foundation" not in imports(mod), mod
+
+
+def test_tax_compare_is_an_orchestrator():
+    """TAX-003 (Q-023): tax-compare orchestrates the production run pipeline (app.prepare_run /
+    app.run_prepared); it has no engine, tax, foundation, settlement, metrics or data loading
+    of its own, and nothing but the command dispatcher depends on it."""
+    assert imports("tax_compare") <= {"allocation", "app", "calendar", "config", "errors",
+                                      "manifest", "reporting", "validation"}
+    text = (SRC / "tax_compare.py").read_text(encoding="utf-8")
+    for word in ("run_engine", "load_role", "settle_terminal", "compute_run_metrics"):
+        assert word not in text, word
+    for mod in ("engine", "tax", "foundation", "settlement", "metrics", "reporting", "rebalancing",
+                "sell_to_pay", "data_loader", "config", "cli"):
+        assert "tax_compare" not in imports(mod), mod

@@ -97,7 +97,9 @@ def cli_layer(args) -> dict:
     put("portfolio.rebalance_band_pp", args.rebalance_band_pp)
     put("portfolio.transaction_cost_bps", args.transaction_cost_bps)
     put("portfolio.slippage_bps", args.slippage_bps)
-    put("tax.profile", args.tax_profile); put("tax.dividend_tax_mode", args.dividend_tax_mode)
+    if cmd != "tax-compare":                    # tax-compare: a profile list (see below)
+        put("tax.profile", args.tax_profile)
+    put("tax.dividend_tax_mode", args.dividend_tax_mode)
     put("tax.dividend_estimate_policy", args.dividend_estimate_policy)
     put("tax.individual.cost_basis", args.cost_basis)
     put("tax.individual.external_solidarity_base_pln", args.external_solidarity_base)
@@ -174,10 +176,9 @@ def cli_layer(args) -> dict:
                                                                         "--confirmation-grid")])
     if args.band_pp:
         put("optimizer.rebalance_band_grid", parse_grid(args.band_pp, "--band-pp"))
-    if cmd == "tax-compare" and args.tax_profile:
-        profiles = [x.strip() for x in args.tax_profile.split(",")]
-        put("tax.compare_profiles", profiles)
-        set_path(layer, "tax.profile", profiles[0])
+    if cmd == "tax-compare" and args.tax_profile is not None:
+        # validated (allowed values, no duplicates, >= 1) and ordered by tax_compare
+        put("tax.compare_profiles", [x.strip() for x in args.tax_profile.split(",")])
     return layer
 
 

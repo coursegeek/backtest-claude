@@ -37,7 +37,8 @@ Mapa każdego wymagania na moduł/test jest w `work/compliance_matrix.csv`.
 |---|---|---|---|---|
 | config / CLI | `backtest.py`, `src/cli.py`, `src/config.py` | komendy `run`, `signals`, `delay-scan`, `threshold-scan`, `optimize`, `rebalance-scan`, `tax-compare`; defaulty DEF-*, precedencja CLI > plik > defaulty, konwersja jednostek, `config_resolved.yaml` | META-001/004/005, DEF-*, ALLOC-001..003, RUN-*, CLI-* | obliczeń |
 | błędy | `src/errors.py` | hierarchia wyjątków z kodami wyjścia CLI (ERR-001..004, ConfigError, LookAheadError, NotImplementedCommand) | ERR-* | logiki |
-| komendy | `src/app.py` | implementacje komend za CLI i API importu (obecnie `signals`; komendy portfelowe walidują config i kończą się NotImplementedCommand) | META-001, NORM-012 | obliczeń |
+| komendy | `src/app.py` | implementacje komend za CLI i API importu: `signals`, `run` (przygotowanie danych `prepare_run` → `PreparedRun`; wykonanie `run_prepared`: engine + hooki + settlement + shadow pre-tax + metryki + wyjścia); pozostałe komendy walidują config i kończą się NotImplementedCommand | META-001, NORM-012 | obliczeń |
+| tax-compare (sesja 9) | `src/tax_compare.py` | orkiestrator: walidacja listy profili i kolejność kanoniczna, configi profili różniące się wyłącznie `tax.profile`, superset wymagań danych, jedno `prepare_run` i ten sam `PreparedRun` dla każdego `run_prepared`, top-level `summary.csv` + `profiles/<p>/` + `tax_compare_manifest.json`, atomowość błędów (Q-023) | TAX-003, FND-008, CLI-006, REP-002/012, REPRO-006 | własnego silnika, ładowania danych, rankingu |
 | signal pipeline | `src/signal_analysis.py` | złożenie signals → confirmation → scheduling, rekonstrukcja stanu przed startem, analiza signal-only | SIG-003/016/018/019, NORM-012 | księgowości |
 | modele | `src/models.py` | typy: `Observation`, `SourceSeries`, `SignalParams`, `SignalState`, `ScheduledExecution`, `Lot`, `Trade`, `TaxEvent`, `PortfolioState`, `WeekRecord`, `RunResult` | ARCH-* | logiki |
 | data loading / normalization | `src/data_loader.py` | parsery ról: stocks signal, FF CSV/ZIP, gold, BTC, dywidendy smoothed/exact, CPI, extra assets, distribution file; rozwiązywanie ścieżek i aliasów (Q-001); proweniencja (SHA256, zakres, liczba wierszy, segmenty źródeł) | DATA-*, SCHEMA-*, NORM-001/006/008/009/014/015, PORT-001..004, SEM-* | decyzji o polityce braków |
@@ -76,6 +77,7 @@ rebalancing, sell_to_pay (ledger + costs + cost_basis)
 engine (orkiestracja wszystkich powyższych)
 metrics (czyste funkcje na RunResult)   reporting/manifest (I/O)
 optimizer ─ walk_forward (wywołują wyłącznie engine)
+app (prepare_run / run_prepared) ─ tax_compare (orkiestracja; bez engine/tax/settlement)
 config/cli/backtest.py (wejście)
 ```
 
@@ -226,7 +228,7 @@ kalendarzowe, rolling (MET-022/023).
   identyczny z serialnym; postęp tylko na stderr (ERR-005).
 * `delay-scan`, `threshold-scan`, `rebalance-scan` = specjalizacje gridu z single-asset
   (ALLOC-002) lub wagami; kolumny pre-tax i after-tax (DELAY-005).
-* `tax-compare`: te same dane/config, cztery profile, wspólny zakres dat (Q-009, Q-023).
+* `tax-compare` (sesja 9, `src/tax_compare.py`, Q-023 RESOLVED): nie jest częścią optimizera ani drugim backtesterem - to orkiestrator produkcyjnej ścieżki `run`. Wejście przygotowane raz dla supersetu wymagań danych wybranych profili (plik dywidend w kalendarzu, gdy wymaga go choć jeden profil), ten sam `PreparedRun`/`EngineInputs` dla każdego profilu, jeden `summary.csv` (wiersz na profil, schema `SUMMARY_FIELDS`), bez rankingu.
 
 ## 12. Walk-forward
 
@@ -265,7 +267,7 @@ za przełącznikami configu i opisane w `IMPLEMENTATION_NOTES.md`.
 5. `rebalancing`, `sell_to_pay` (TEST-030/045/053/054).
 6. `tax`, `settlement` (TEST-010..017/032..035/046..048/050/052).
 7. `metrics`, `reporting`, `manifest` (TEST-020/022/024/036/043).
-8. `optimizer` + scany + `tax-compare` (TEST-009, CLI-002..006/009/010).
+8. `tax-compare` (sesja 9, CLI-006); `optimizer` + scany (TEST-009, CLI-002..005/009/010).
 9. `walk_forward` (TEST-021/037/049, CLI-011).
 10. Pełny przebieg testów, aktualizacja compliance matrix, `IMPLEMENTATION_NOTES.md`, `python tools/freeze_v2.py`.
 
