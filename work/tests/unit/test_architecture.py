@@ -86,3 +86,17 @@ def test_tax_compare_is_an_orchestrator():
     for mod in ("engine", "tax", "foundation", "settlement", "metrics", "reporting", "rebalancing",
                 "sell_to_pay", "data_loader", "config", "cli"):
         assert "tax_compare" not in imports(mod), mod
+
+
+def test_scans_are_an_orchestrator():
+    """DELAY-001/THR-001/REB-010: scans orchestrate app.prepare_run / app.run_prepared; no
+    engine, data loading, tax or metrics of their own and no optimizer logic."""
+    assert imports("scans") <= {"allocation", "app", "config", "errors", "manifest", "models",
+                                "reporting", "validation"}
+    text = (SRC / "scans.py").read_text(encoding="utf-8")
+    for word in ("run_engine", "load_role", "compute_run_metrics", "settle_terminal", "tie_break",
+                 "sorted(res.rows", "objective ="):
+        assert word not in text, word
+    for mod in ("engine", "tax", "foundation", "settlement", "metrics", "reporting", "app",
+                "config", "cli", "tax_compare"):
+        assert "scans" not in imports(mod) or mod == "app", mod

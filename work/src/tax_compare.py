@@ -19,7 +19,6 @@ The command reports numbers side by side; it never ranks profiles or names a win
 """
 from __future__ import annotations
 
-import copy
 import dataclasses
 import hashlib
 import json
@@ -32,9 +31,9 @@ import yaml
 
 from .allocation import active_risky_assets, strategic_targets
 from .app import (PortfolioRunResult, PreparedRun, check_supported_run, dividend_mode_of,
-                  prepare_run, run_prepared, write_portfolio_outputs)
+                  prepare_run, prepared_input_sha256, run_prepared, write_portfolio_outputs)
 from .calendar import elapsed_days, inception_date
-from .config import ResolvedConfig, flatten, set_path
+from .config import ResolvedConfig, flatten
 from .errors import BacktestError, ConfigError
 from .manifest import build_manifest, code_version, run_timestamp
 from .reporting import (NORMALIZED_FIELDS, SUMMARY_FIELDS, VALIDATION_FIELDS, run_directory,
@@ -94,13 +93,10 @@ def profile_config(base: ResolvedConfig, profile: str, profiles: Optional[tuple]
                    ) -> ResolvedConfig:
     """A new configuration equal to ``base`` except tax.profile (base is not mutated); the
     recorded compare_profiles list is the canonical one (independent of the requested order)."""
-    cli = copy.deepcopy(base.layers["cli"])
-    set_path(cli, "tax.profile", profile)
+    updates = {"tax.profile": profile}
     if profiles is not None:
-        set_path(cli, "tax.compare_profiles", list(profiles))
-    cfg = ResolvedConfig(base.command, base.layers["file"], cli, base.config_path)
-    cfg.print_only = False
-    return cfg
+        updates["tax.compare_profiles"] = list(profiles)
+    return base.with_overrides(updates)
 
 
 def strategy_view(cfg: ResolvedConfig) -> dict:
@@ -124,26 +120,8 @@ def _sha(obj) -> str:
 
 
 def prepared_fingerprint(prepared: PreparedRun) -> str:
-    """SHA-256 of the prepared input as the engine sees it: calendar, weekly returns, RF,
-    dividend yields and status, signal price series, signal parameters, targets, capital,
-    costs, cost basis, as_of, common range, dropped weeks and the source hashes."""
-    i = prepared.inputs
-    return _sha({
-        "weeks": [w.isoformat() for w in i.weeks],
-        "market": [[w.isoformat(), sorted((a, repr(r)) for a, r in m.asset_returns.items()),
-                    repr(m.rf_return), sorted((a, repr(d)) for a, d in m.dividend_yield.items()),
-                    sorted(m.dividend_status.items())] for w, m in sorted(i.market.items())],
-        "signal_series": {a: [[p.week_key.isoformat(), repr(p.price), p.available_at.isoformat()]
-                              for p in s.points] for a, s in sorted(i.signal_series.items())},
-        "params": {a: dataclasses.asdict(p) for a, p in sorted(i.params.items())},
-        "targets": {k: repr(v) for k, v in sorted(i.targets.items())},
-        "initial_capital": repr(i.initial_capital), "costs": dataclasses.asdict(i.costs),
-        "cost_basis_method": i.cost_basis_method, "run_start": str(i.run_start),
-        "as_of": prepared.as_of.isoformat(), "dividend_mode": prepared.dividend_mode,
-        "common_range": [str(x) for x in prepared.common_range],
-        "dropped": [w.isoformat() for w in prepared.calendar.dropped],
-        "sources": [[p.role, p.sha256] for p in sorted(prepared.provenances, key=lambda p: p.role)],
-    })
+    """app.prepared_input_sha256: the data/calendar identity shared by every profile."""
+    return prepared_input_sha256(prepared)
 
 
 # ============================================================================ result

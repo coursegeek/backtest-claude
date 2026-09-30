@@ -10,7 +10,8 @@ from __future__ import annotations
 import argparse
 import sys
 
-from .config import RISKY_ASSETS, ResolvedConfig, load_config_file, parse_grid, set_path
+from .config import (RISKY_ASSETS, ResolvedConfig, int_grid, load_config_file, parse_grid,
+                     percent_grid, percent_value, set_path)
 from .errors import BacktestError, ConfigError
 
 COMMANDS = ("run", "signals", "delay-scan", "threshold-scan", "optimize", "tax-compare",
@@ -19,10 +20,15 @@ SCAN_COMMANDS = ("delay-scan", "threshold-scan")
 
 
 def _pct(text, name):
-    try:
-        return float(text) / 100.0
-    except ValueError as exc:
-        raise ConfigError(f"{name}: number expected, got {text!r}") from exc
+    """Q-026: percent CLI value -> decimal fraction (exact decimal conversion)."""
+    return percent_value(text, name)
+
+
+def _int(text, name):
+    vals = int_grid(text, name)
+    if len(vals) != 1:
+        raise ConfigError(f"{name}: a single positive integer is expected")
+    return vals[0]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -116,9 +122,15 @@ def cli_layer(args) -> dict:
                else list(RISKY_ASSETS))
     sig = {}
     if args.ma is not None and cmd != "optimize":
-        sig["ma_length"] = int(args.ma)
+        sig["ma_length"] = _int(args.ma, "--ma")
     if args.threshold is not None and cmd != "threshold-scan":
         sig["threshold"] = _pct(args.threshold, "--threshold")
+    if cmd == "threshold-scan" and (args.threshold_off is not None or args.threshold_on is not None
+                                    or args.threshold_grid):
+        raise ConfigError("threshold-scan scans one symmetric threshold per grid point "
+                          "(threshold_off = threshold_on = p, THR-002): give the grid with "
+                          "--threshold (percent); --threshold-off/--threshold-on/--threshold-grid "
+                          "are not accepted")
     if args.threshold_off is not None:
         sig["threshold_off"] = _pct(args.threshold_off, "--threshold-off")
     if args.threshold_on is not None:
@@ -131,17 +143,15 @@ def cli_layer(args) -> dict:
         if val is not None:
             sig[key] = val
     if args.delay is not None:
-        if cmd == "delay-scan":
-            put("optimizer.delay_grid", [int(x) for x in parse_grid(args.delay, "--delay")])
-        else:
-            vals = parse_grid(args.delay, "--delay")
-            if len(vals) != 1 or not float(vals[0]).is_integer():
+        if cmd == "delay-scan":                     # DELAY-002/003: the scanned grid
+            put("optimizer.delay_grid", int_grid(args.delay, "--delay"))
+        else:                                       # THR-003 / run: one scalar delay
+            vals = int_grid(args.delay, "--delay")
+            if len(vals) != 1:
                 raise ConfigError("--delay: a single positive integer is expected for this command")
-            if cmd == "threshold-scan":
-                put("optimizer.delay_grid", [int(vals[0])])
-            sig["delay_weeks"] = int(vals[0])
-    if cmd == "threshold-scan" and args.threshold is not None:
-        put("optimizer.threshold_grid", [x / 100.0 for x in parse_grid(args.threshold, "--threshold")])
+            sig["delay_weeks"] = vals[0]
+    if cmd == "threshold-scan" and args.threshold is not None:     # THR-002/005, percent
+        put("optimizer.threshold_grid", percent_grid(args.threshold, "--threshold"))
     for asset in targets:
         for k, v in sig.items():
             put(f"signals.{asset}.{k}", v)
@@ -150,14 +160,14 @@ def cli_layer(args) -> dict:
     for opt, key in (("btc_weight", "optimizer.btc_weight"), ("gold_weight", "optimizer.gold_weight")):
         v = getattr(args, opt)
         if v is not None:
-            put(key, [x / 100.0 for x in parse_grid(v, f"--{opt.replace('_', '-')}")])
+            put(key, percent_grid(v, f"--{opt.replace('_', '-')}"))
     if args.stocks_weight is not None:
         put("optimizer.stocks_weight", "remainder" if args.stocks_weight == "remainder"
-            else [x / 100.0 for x in parse_grid(args.stocks_weight, "--stocks-weight")])
+            else percent_grid(args.stocks_weight, "--stocks-weight"))
     if args.rf_weight is not None:
         put("optimizer.rf_weight", _pct(args.rf_weight, "--rf-weight"))
     if args.max_drawdown_limit is not None:
-        put("optimizer.max_drawdown_limit", args.max_drawdown_limit / 100.0)
+        put("optimizer.max_drawdown_limit", _pct(args.max_drawdown_limit, "--max-drawdown-limit"))
     put("optimizer.objective", args.objective); put("optimizer.mode", args.optimization_mode)
     if args.optimize_params:
         put("optimizer.parameters", [x.strip() for x in args.optimize_params.split(",")])
@@ -165,16 +175,14 @@ def cli_layer(args) -> dict:
     put("optimizer.train_years", args.train_years); put("optimizer.test_years", args.test_years)
     put("optimizer.step_years", args.step_years)
     if args.ma_grid:
-        put("optimizer.ma_grid", [int(x) for x in parse_grid(args.ma_grid, "--ma-grid")])
+        put("optimizer.ma_grid", int_grid(args.ma_grid, "--ma-grid", minimum=2))
     if args.threshold_grid:
-        put("optimizer.threshold_grid", [x / 100.0 for x in parse_grid(args.threshold_grid,
-                                                                        "--threshold-grid")])
+        put("optimizer.threshold_grid", percent_grid(args.threshold_grid, "--threshold-grid"))
     if args.delay_grid:
-        put("optimizer.delay_grid", [int(x) for x in parse_grid(args.delay_grid, "--delay-grid")])
+        put("optimizer.delay_grid", int_grid(args.delay_grid, "--delay-grid"))
     if args.confirmation_grid:
-        put("optimizer.confirmation_grid", [int(x) for x in parse_grid(args.confirmation_grid,
-                                                                        "--confirmation-grid")])
-    if args.band_pp:
+        put("optimizer.confirmation_grid", int_grid(args.confirmation_grid, "--confirmation-grid"))
+    if args.band_pp is not None:                    # REB-010: percentage points
         put("optimizer.rebalance_band_grid", parse_grid(args.band_pp, "--band-pp"))
     if cmd == "tax-compare" and args.tax_profile is not None:
         # validated (allowed values, no duplicates, >= 1) and ordered by tax_compare

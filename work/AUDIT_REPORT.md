@@ -35,7 +35,7 @@ Core engine nie został napisany; powstały wyłącznie narzędzia audytowe, rap
 | MINOR | 23 (+ Q-050, Q-051, Q-052) |
 | MUST zmapowane bez blokera (`MAPPED`) | 340 w audycie → 347 po adjudykacji |
 | MUST zablokowane decyzją (`BLOCKED`) | 12 w audycie → 5 po adjudykacji (tylko DATA BLOCKER) |
-| MUST `PASS` | 0 w audycie; 139 po sesji 2; 165 po sesji 3; 177 po sesji 4; 217 po sesji 5; 225 po sesji 6; 262 po sesji 7; 287 po sesji 8; 290 po sesji 9 (sekcja 13) |
+| MUST `PASS` | 0 w audycie; 139 po sesji 2; 165 po sesji 3; 177 po sesji 4; 217 po sesji 5; 225 po sesji 6; 262 po sesji 7; 287 po sesji 8; 290 po sesji 9; 304 po sesji 10 (sekcja 13) |
 | SHOULD proponowane do odroczenia | 1 (ERR-007 cache) |
 | Kontrole danych | 58: 27 PASS, 12 FAIL, 14 WARN, 5 INFO |
 | Scenariusze AB + przykłady CLI | 20: 10 wykonalnych, 10 wymaga decyzji |
@@ -199,7 +199,7 @@ Repozytorium jest gotowe do rozpoczęcia implementacji warstw niezależnych od b
 6 blokerów; do tego czasu odpowiadające im wiersze pozostają `BLOCKED`, a V2 będzie emitować
 jawne ostrzeżenia lub czytelne błędy zamiast cichych założeń.
 
-## 12. Adjudykacje użytkownika (sesje 2–9)
+## 12. Adjudykacje użytkownika (sesje 2–10)
 
 | Pytanie | Status | Skutek |
 |---|---|---|
@@ -226,6 +226,8 @@ jawne ostrzeżenia lub czytelne błędy zamiast cichych założeń.
 | Q-052 polityki estimate (sesja 6) | RESOLVED | allow_with_warning (estimate + ostrzeżenie + status), actual_only (estimate usuwane ze źródła, decyduje alignment/missing policy), error_on_estimate (błąd). |
 | Q-032 terminal settlement (sesje 6-8) | RESOLVED | individual_pl: likwidacja 100% ryzykownych aktywów z kosztami → realizacje do roku finalnego → netting + carry-forward → CG → danina → after_tax_terminal_wealth; nie jest tygodniem backtestu. none (sesja 7): brak settlementu, pola terminalne 0, after_tax_terminal_wealth = pre_terminal_nav. Fundacje (sesja 8, tax_event=terminal): likwidacja → konsolidacja rezerw → koszt admin roku finalnego → distributed_amount → podatek od dystrybucji (distributed_amount albo gain_only od initial capital) → after_tax_terminal_wealth. distribution_schedule: osobne Q-037. |
 | Q-023 tax-compare / S06 (sesja 9) | RESOLVED | tax-compare jest pełnym portfolio runem: ALLOC-001 obowiązuje (wagi przez `--config` lub `--weights`, brak ukrytych wag); brak configów V1; S06 ma zamrożony config V2 `work/configs/tax_compare_s06.yaml` bez pojedynczego `tax.profile`; wspólny kalendarz = superset wymagań danych wybranych profili; wejście przygotowane raz i współdzielone przez wszystkie profile. |
+| Q-026 jednostki CLI (sesja 10) | RESOLVED | Progi CLI (`--threshold`, `-off`, `-on`, `--threshold-grid`) i gridy wag w procentach (`--threshold 0.03` = 0.03%), `--weights`/`--sell-fraction`/`--sortino-mar` dziesiętnie, `--rebalance-band-pp`/`--band-pp` w pp, config zawsze dziesiętnie; `a:b:step` inclusive, listy nieregularne; konwersje w arytmetyce dziesiętnej bez zaokrągleń. |
+| Q-027 precedencja parametrów (sesja 10) | RESOLVED | CLI > `signals.<asset>.*` > `signal.*` > `signals.default.*` > DEF-*; delay-scan 1:4, threshold-scan 1:5:1 z delay 1, run delay 1; w scanach flagi sygnału tylko dla `--asset`. |
 | Q-033 setup cost a CAGR (sesja 8) | RESOLVED | CAGR/real CAGR od initial_capital_pln (przed setup cost); ścieżka tygodniowa, drawdown i lata od investable capital; setup nie jest drawdownem. |
 | Q-034 proration kosztu admin (sesja 8) | RESOLVED | Dni roku w (inception, last_week]; prorated = koszt * dni / 365|366; full = pełny koszt za rok z aktywnym dniem; dni grudnia przed pierwszym tygodniem stycznia należne w pierwszym tygodniu. |
 | Q-040 konwencje metryk (sesja 7) | RESOLVED | Drawdown od NAV_start bez terminalu; lata wg Friday key z flagą partial; trade_count i turnover tylko transakcje weekly (terminal osobno); udziały RISK_ON/OFF per aktywo; Sharpe after-tax z RF netto. |
@@ -295,7 +297,16 @@ Wiersze MUST nadal `BLOCKED` (dane niekanoniczne): SEM-001, SEM-003, SCHEMA-005,
   przerywa całość bez zapisu; bez rankingu. Zamrożony config S06 V2 i `AB_SCENARIOS.csv`
   S06. Q-023 RESOLVED.
 
-Stan macierzy: MUST — 290 `PASS`, 14 `IN_PROGRESS`, 43 `MAPPED`, 5 `BLOCKED` (DATA BLOCKER),
+* Sesja 10: `delay-scan`, `threshold-scan`, `rebalance-scan` (`src/scans.py`) jako
+  orkiestratory ścieżki `run`: cały grid i configi wariantów walidowane przed danymi, jedno
+  `prepare_run` na scan (warm-up = największe wymaganie gridu; bez `--start` pierwszy wspólny
+  tydzień z pełnym warm-upem), `run_prepared` na punkt (świeży stan portfela, lotów, trackerów,
+  podatków), `grid_results.csv` (kolumny scanu + `SUMMARY_FIELDS`), `scan_manifest.json`,
+  wspólne dane/walidacja, atomowość, postęp na stderr. `PreparedRun.inputs_for` podmienia tylko
+  pola strategii; `prepared_input_sha256` obejmuje wyłącznie dane/kalendarz (także w
+  tax-compare). Parsowanie gridów w arytmetyce dziesiętnej. Q-026 i Q-027 RESOLVED.
+
+Stan macierzy: MUST — 304 `PASS`, 10 `IN_PROGRESS`, 33 `MAPPED`, 5 `BLOCKED` (DATA BLOCKER),
 0 `FAIL`; SHOULD — 14 `PASS`. Testy: `python -m pytest work` (wszystkie przechodzą). Żaden wiersz
 zablokowany przez Q-002/Q-004/Q-008 nie został oznaczony `PASS` na podstawie staged plików;
 dowody dla LBMA, segmentów SEM-001 i kanonicznego SCHEMA-005 pochodzą z syntetycznych fixture'ów.
@@ -308,9 +319,9 @@ questions_total=52
 blockers=6
 major=20
 minor=26
-must_mapped=43
+must_mapped=33
 must_blocked=5
-must_pass=290
+must_pass=304
 should_proposed_deferral=1
 input_checks=58
 checks_fail=12
@@ -322,9 +333,9 @@ scenarios_feasible=10
 scenarios_needs_decision=10
 blocker_ids=Q-002,Q-004,Q-005,Q-008,Q-012,Q-020
 data_blocker_ids=Q-002,Q-004,Q-008
-resolved_ids=Q-005,Q-006,Q-012,Q-014,Q-015,Q-016,Q-017,Q-018,Q-019,Q-020,Q-023,Q-029,Q-030,Q-032,Q-033,Q-034,Q-035,Q-039,Q-040,Q-045,Q-046,Q-049,Q-050,Q-051,Q-052
-open_questions=24
+resolved_ids=Q-005,Q-006,Q-012,Q-014,Q-015,Q-016,Q-017,Q-018,Q-019,Q-020,Q-023,Q-026,Q-027,Q-029,Q-030,Q-032,Q-033,Q-034,Q-035,Q-039,Q-040,Q-045,Q-046,Q-049,Q-050,Q-051,Q-052
+open_questions=22
 must_fail=0
-must_in_progress=14
+must_in_progress=10
 should_pass=14
 -->

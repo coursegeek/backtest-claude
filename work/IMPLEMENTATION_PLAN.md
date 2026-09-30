@@ -61,7 +61,8 @@ Mapa każdego wymagania na moduł/test jest w `work/compliance_matrix.csv`.
 | weekly engine | `src/engine.py` | inicjalizacja (krok 0), `step()` wg PORT-011, pętla tygodni, cienista symulacja pre-tax (Q-015), wywołanie settlement | PORT-011/012, SIG-019, RISK-001/003/005/007 | parsowania i raportów |
 | metrics | `src/metrics.py` | CAGR, after-tax CAGR, real, vol, Sharpe, Sortino, maxDD, Calmar, lata kalendarzowe, turnover, czas w stanie, rolling | MET-*, REAL-001..003, REB-005 | I/O |
 | reporting | `src/reporting.py`, `src/manifest.py` | `summary.csv`, `weekly_portfolio.csv`, `trades.csv`, `tax_events.csv`, `signals.csv`, `config_resolved.yaml`, `data_manifest.json`, `validation_report.csv`, `grid_results.csv`, `walk_forward_results.csv`, `weekly_normalized.csv`, `rolling_metrics.csv`, tabela w konsoli | REP-*, REPRO-*, NORM-007 | obliczeń metryk |
-| optimization | `src/optimizer.py` | parser zakresów `a:b:step`, gridy wag/sygnałów/band, walidacja sum, cele, limit DD, tie-break, równoległość z deterministycznym scaleniem, scany, `tax-compare` | OPT-*, DELAY-*, THR-*, REB-010, TAX-003, ERR-005/006 | logiki portfela |
+| scany (sesja 10) | `src/scans.py` | `delay-scan`, `threshold-scan`, `rebalance-scan`: rozwiązanie i walidacja całego gridu przed danymi, configi wariantów różniące się tylko skanowanym parametrem, jedno `prepare_run` z największym warm-upem gridu, `run_prepared` na punkt, `grid_results.csv` (kolumny scanu + `SUMMARY_FIELDS`), `scan_manifest.json`, atomowość, postęp na stderr | DELAY-001..005, THR-001..005, REB-010, REP-010, ALLOC-002, CLI-002/003/010 | własnego silnika, ładowania danych per punkt, celu/rankingu |
+| optimization | `src/optimizer.py` | gridy wag (procenty, Q-026), walidacja sum, cele, limit DD, tie-break (Q-041), równoległość z deterministycznym scaleniem; parser zakresów `a:b:step` jest w `src/config.py` | OPT-*, ERR-005/006 | logiki portfela |
 | walk-forward | `src/walk_forward.py` | okna rolling/anchored, krok, ostatnie okno częściowe, wybór parametrów na train, sklejanie OOS z ciągłym stanem, `walk_forward_rebalance` | WF-*, REP-016 | danych z okna test w treningu |
 
 ### Graf zależności (bez cykli)
@@ -77,7 +78,7 @@ rebalancing, sell_to_pay (ledger + costs + cost_basis)
 engine (orkiestracja wszystkich powyższych)
 metrics (czyste funkcje na RunResult)   reporting/manifest (I/O)
 optimizer ─ walk_forward (wywołują wyłącznie engine)
-app (prepare_run / run_prepared) ─ tax_compare (orkiestracja; bez engine/tax/settlement)
+app (prepare_run / run_prepared) ─ tax_compare, scans (orkiestracja; bez engine/tax/settlement)
 config/cli/backtest.py (wejście)
 ```
 
@@ -226,8 +227,11 @@ kalendarzowe, rolling (MET-022/023).
 * Cele OPT-007, limit maxDD OPT-008, tie-break OPT-009 (Q-041); cały grid zapisany (OPT-010).
 * Równoległość `--jobs` (ERR-006): zadania indeksowane, wyniki scalane po indeksie → wynik
   identyczny z serialnym; postęp tylko na stderr (ERR-005).
-* `delay-scan`, `threshold-scan`, `rebalance-scan` = specjalizacje gridu z single-asset
-  (ALLOC-002) lub wagami; kolumny pre-tax i after-tax (DELAY-005).
+* `delay-scan`, `threshold-scan`, `rebalance-scan` (sesja 10, `src/scans.py`, Q-026/Q-027
+  RESOLVED): orkiestratory produkcyjnej ścieżki `run`, nie część optimizera. Cały grid
+  rozwiązany i zwalidowany przed danymi, dane przygotowane raz (warm-up = największe wymaganie
+  gridu), jeden pełny run na punkt (`run_prepared`), `grid_results.csv` = kolumny scanu +
+  `SUMMARY_FIELDS` (pre-tax i after-tax, DELAY-005), bez celu i rankingu.
 * `tax-compare` (sesja 9, `src/tax_compare.py`, Q-023 RESOLVED): nie jest częścią optimizera ani drugim backtesterem - to orkiestrator produkcyjnej ścieżki `run`. Wejście przygotowane raz dla supersetu wymagań danych wybranych profili (plik dywidend w kalendarzu, gdy wymaga go choć jeden profil), ten sam `PreparedRun`/`EngineInputs` dla każdego profilu, jeden `summary.csv` (wiersz na profil, schema `SUMMARY_FIELDS`), bez rankingu.
 
 ## 12. Walk-forward
@@ -267,7 +271,7 @@ za przełącznikami configu i opisane w `IMPLEMENTATION_NOTES.md`.
 5. `rebalancing`, `sell_to_pay` (TEST-030/045/053/054).
 6. `tax`, `settlement` (TEST-010..017/032..035/046..048/050/052).
 7. `metrics`, `reporting`, `manifest` (TEST-020/022/024/036/043).
-8. `tax-compare` (sesja 9, CLI-006); `optimizer` + scany (TEST-009, CLI-002..005/009/010).
+8. `tax-compare` (sesja 9, CLI-006); scany (sesja 10, CLI-002/003/010); `optimizer` (TEST-009, CLI-004/005/009).
 9. `walk_forward` (TEST-021/037/049, CLI-011).
 10. Pełny przebieg testów, aktualizacja compliance matrix, `IMPLEMENTATION_NOTES.md`, `python tools/freeze_v2.py`.
 

@@ -7,18 +7,23 @@ Implemented in this build:
                       portfolio.rebalance mode, with terminal settlement, pre-tax shadow run,
                       metrics and summary.csv;
   * ``tax-compare`` - orchestration of the run pipeline for several tax profiles on one shared
-                      prepared input (``tax_compare.py``, TAX-003, FND-008, Q-023).
+                      prepared input (``tax_compare.py``, TAX-003, FND-008, Q-023);
+  * ``delay-scan``, ``threshold-scan``, ``rebalance-scan`` - the full grid of runs of one
+                      scanned strategy parameter on one shared prepared input (``scans.py``).
 A run is split into data preparation (``prepare_run``: load, validate and align every source,
 CPI window included) and execution (``run_prepared``: engine, terminal settlement, pre-tax
 shadow, metrics, outputs); execution never reloads or realigns data.
-Everything else (scans, optimize, walk-forward, distribution_schedule, foundation internal
-trading tax > 0) resolves and validates its configuration and then stops with a clear
+Everything else (optimize, walk-forward, distribution_schedule, foundation internal trading
+tax > 0) resolves and validates its configuration and then stops with a clear
 NotImplementedCommand; no partial results are produced.
 """
 from __future__ import annotations
 
+import bisect
 import dataclasses
 import datetime as dt
+import hashlib
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -29,7 +34,7 @@ from .calendar import (common_range, elapsed_days, first_key_on_or_after, first_
 from .config import ResolvedConfig
 from .data_loader import load_dividend_cash, load_role
 from .errors import (BacktestError, ConfigError, DataFileNotFound, DataValidationError,
-                     DividendModeError, NotImplementedCommand)
+                     DividendModeError, NotImplementedCommand, WarmupError)
 from .manifest import build_manifest, run_timestamp
 from .costs import CostModel
 from .engine import ComposedHooks, EngineInputs, WeekMarket, run_engine
@@ -192,10 +197,39 @@ class PreparedRun:
     truncations: tuple
     cpi_series: Optional[object] = None
     cpi_window: Optional[object] = None
+    warmup_weeks: dict = field(default_factory=dict)   # asset -> verified warm-up requirement
+    first_week_rule: str = "run.start"
 
     @property
     def inception(self) -> dt.date:
         return inception_date(self.first_week)
+
+    def inputs_for(self, cfg: ResolvedConfig) -> EngineInputs:
+        """EngineInputs of one configuration on this prepared input: the data objects (weeks,
+        market, signal series) are shared, only the strategy fields (signal parameters,
+        targets, capital, costs, cost basis) come from ``cfg``; the prepared object itself is
+        returned when they are identical. The configuration must use the prepared assets and
+        must not need more warm-up than was verified."""
+        targets = strategic_targets(cfg)
+        assets = active_risky_assets(targets)
+        if assets != canonical_assets(self.inputs.params):
+            raise ConfigError(f"configuration uses assets {assets}, the prepared input holds "
+                              f"{canonical_assets(self.inputs.params)}")
+        params = {a: cfg.signal_params(a) for a in assets}
+        if cfg.get("signal.initial_state") != "RISK_ON":
+            for a in assets:
+                if params[a].minimum_warmup_weeks > self.warmup_weeks.get(a, 0):
+                    raise ConfigError(f"{a}: the configuration needs {params[a].minimum_warmup_weeks}"
+                                      f" warm-up weeks but the prepared input verified "
+                                      f"{self.warmup_weeks.get(a, 0)} (prepare with the largest "
+                                      "grid requirement, NORM-010)")
+        strategy = dict(params=params, targets=targets,
+                        initial_capital=float(cfg.get("portfolio.initial_capital_pln")),
+                        costs=CostModel.from_config(cfg),
+                        cost_basis_method=cfg.get("tax.individual.cost_basis"))
+        if all(getattr(self.inputs, k) == v for k, v in strategy.items()):
+            return self.inputs
+        return dataclasses.replace(self.inputs, **strategy)
 
     def context(self) -> dict:
         """PortfolioRunResult fields shared by every run of this prepared input; the
@@ -294,11 +328,17 @@ def dividend_status_issues(cfg, weeks, div) -> list:
             for a, b in blocks]
 
 
-def build_run(cfg: ResolvedConfig, dividend_mode: Optional[str] = None):
+def build_run(cfg: ResolvedConfig, dividend_mode: Optional[str] = None,
+              warmup_params: Optional[dict] = None, auto_start: bool = False):
     """Load, validate and align every source of a portfolio run; returns EngineInputs and
     the run context (NORM-011, NORM-019, Q-012, Q-014). ``dividend_mode`` overrides the data
     requirement of the configured profile: ``tax-compare`` passes the superset requirement of
-    all compared profiles so that every profile shares one calendar (Q-023)."""
+    all compared profiles so that every profile shares one calendar (Q-023).
+    ``warmup_params`` (asset -> SignalParams) replaces the configured parameters in the warm-up
+    requirement (NORM-010/ERR-003): a scan passes the largest requirement of its grid so that
+    one calendar is valid for every grid point. ``auto_start`` (scans only): without run.start
+    the first return week is the first week of the common range at which every asset has that
+    warm-up (never a later start for only some grid points)."""
     check_supported_run(cfg)
     targets = strategic_targets(cfg)
     assets = active_risky_assets(targets)
@@ -333,7 +373,15 @@ def build_run(cfg: ResolvedConfig, dividend_mode: Optional[str] = None):
         report.add(ValidationIssue(Severity.WARNING, "range_truncated", role,
                                    f"{side} truncated from {own} to common {eff} (NORM-011)", eff,
                                    "NORM-011"))
+    params = {a: cfg.signal_params(a) for a in assets}
+    wparams = dict(params, **(warmup_params or {}))
+    initial_state = cfg.get("signal.initial_state")
     first = first_return_week(cfg.start, start)
+    first_rule = "run.start" if cfg.start else "common range start"
+    if auto_start and cfg.start is None and initial_state != "RISK_ON":
+        first = first_warmup_week(ff_stock, start, end, {a: series[a].keys() for a in assets},
+                                  {a: wparams[a].minimum_warmup_weeks for a in assets})
+        first_rule = "first common week with the complete warm-up of every grid point"
     last = last_return_week(cfg.end, end)
     if div_mode == "smoothed_weekly":
         for i in validate_dividend_series(div_series, first):
@@ -350,9 +398,8 @@ def build_run(cfg: ResolvedConfig, dividend_mode: Optional[str] = None):
                                    end, "NORM-011;RUN-002"))
     if first > last:
         raise ConfigError(f"empty backtest range: first week {first} after last week {last}")
-    params = {a: cfg.signal_params(a) for a in assets}
     for a in assets:
-        warn = check_warmup(a, series[a].keys(), first, params[a], cfg.get("signal.initial_state"))
+        warn = check_warmup(a, series[a].keys(), first, wparams[a], initial_state)
         if warn:
             report.add(warn)
     sources = {"stocks_return": [p.week_key for p in ff_stock]}
@@ -425,8 +472,23 @@ def build_run(cfg: ResolvedConfig, dividend_mode: Optional[str] = None):
     ctx = dict(report=report, provenances=provs, first_week=first,
                last_week=last, as_of=as_of, targets=targets, dropped_incomplete_weeks=dropped,
                calendar=cal, normalized=normalized, dividend_mode=div_mode,
-               common_range=(start, end), truncations=tuple(truncations))
+               common_range=(start, end), truncations=tuple(truncations),
+               warmup_weeks={a: wparams[a].minimum_warmup_weeks for a in assets},
+               first_week_rule=first_rule)
     return inputs, ctx
+
+
+def first_warmup_week(returns, start, end, keys: dict, need: dict) -> dt.date:
+    """First return week in [start, end] before which every asset has at least ``need``
+    observations of its signal series (NORM-010, Q-050: warm-up counts observations)."""
+    for p in returns:
+        w = p.week_key
+        if w < start or w > end:
+            continue
+        if all(bisect.bisect_left(keys[a], w) >= need[a] for a in keys):
+            return w
+    worst = max(need, key=lambda a: need[a])
+    raise WarmupError(worst, bisect.bisect_left(keys[worst], end), need[worst], end)
 
 
 def build_hooks(cfg: ResolvedConfig, inception: Optional[dt.date] = None):
@@ -498,16 +560,43 @@ def load_cpi_window(cfg: ResolvedConfig, inception, last_week, report):
     return cpi, window
 
 
-def prepare_run(cfg: ResolvedConfig, dividend_mode: Optional[str] = None) -> PreparedRun:
+def prepare_run(cfg: ResolvedConfig, dividend_mode: Optional[str] = None,
+                warmup_params: Optional[dict] = None, auto_start: bool = False) -> PreparedRun:
     """Data preparation of a portfolio run: sources, calendar, EngineInputs and the CPI window
-    of the retained range (REAL-001..004). ``dividend_mode`` - see ``build_run``."""
-    inputs, ctx = build_run(cfg, dividend_mode)
+    of the retained range (REAL-001..004). ``dividend_mode``, ``warmup_params`` and
+    ``auto_start`` - see ``build_run``."""
+    inputs, ctx = build_run(cfg, dividend_mode, warmup_params, auto_start)
     report = ctx.pop("report")
     cpi, window = load_cpi_window(cfg, inception_date(ctx["first_week"]), inputs.weeks[-1], report)
     if cpi is not None:
         ctx["provenances"] += (cpi.provenance,)
     return PreparedRun(inputs=inputs, issues=tuple(report.issues), cpi_series=cpi,
                        cpi_window=window, **ctx)
+
+
+def prepared_input_sha256(prepared: PreparedRun) -> str:
+    """SHA-256 of the prepared data/calendar input as the engine sees it: retained weeks,
+    weekly returns, RF, dividend yields and status, signal price series, first week, as_of,
+    dividend mode, common range, dropped weeks, CPI window and the source hashes. Strategy
+    parameters (signal parameters, targets, capital, costs, rebalancing band, tax profile) are
+    not part of it: every variant of a scan or tax-compare shares this hash."""
+    i = prepared.inputs
+    cpi = prepared.cpi_window
+    payload = {
+        "weeks": [w.isoformat() for w in i.weeks],
+        "market": [[w.isoformat(), sorted((a, repr(r)) for a, r in m.asset_returns.items()),
+                    repr(m.rf_return), sorted((a, repr(d)) for a, d in m.dividend_yield.items()),
+                    sorted(m.dividend_status.items())] for w, m in sorted(i.market.items())],
+        "signal_series": {a: [[p.week_key.isoformat(), repr(p.price), p.available_at.isoformat()]
+                              for p in s.points] for a, s in sorted(i.signal_series.items())},
+        "run_start": str(i.run_start), "as_of": prepared.as_of.isoformat(),
+        "dividend_mode": prepared.dividend_mode,
+        "common_range": [str(x) for x in prepared.common_range],
+        "dropped": [w.isoformat() for w in prepared.calendar.dropped],
+        "cpi_window": dataclasses.asdict(cpi) if cpi is not None else None,
+        "sources": [[p.role, p.sha256] for p in sorted(prepared.provenances, key=lambda p: p.role)],
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 
 
 def check_prepared_for(cfg: ResolvedConfig, prepared: PreparedRun) -> None:
@@ -529,8 +618,9 @@ def run_prepared(cfg: ResolvedConfig, prepared: PreparedRun, write: bool = True,
     metrics and (optionally) the standard outputs."""
     check_supported_run(cfg)
     check_prepared_for(cfg, prepared)
-    inputs = prepared.inputs
+    inputs = prepared.inputs_for(cfg)               # shared data, strategy of ``cfg``
     ctx = prepared.context()
+    ctx["targets"] = inputs.targets
     inception = prepared.inception
     hooks = hooks if hooks is not None else build_hooks(cfg, inception)
     result = run_engine(inputs, hooks)
@@ -674,11 +764,10 @@ def dispatch(cfg: ResolvedConfig):
     if cmd == "tax-compare":
         from .tax_compare import run_tax_compare
         return run_tax_compare(cfg)
-    if cmd in ("delay-scan", "threshold-scan"):
-        if not cfg.get("run.asset"):
-            raise ConfigError(f"{cmd} requires --asset stocks|gold|btc (ALLOC-002)")
-    elif cmd == "rebalance-scan":
-        strategic_targets(cfg)          # ALLOC-001: fail early without explicit targets
+    if cmd in ("delay-scan", "threshold-scan", "rebalance-scan"):
+        from .scans import run_scan
+        return run_scan(cfg)
     raise NotImplementedCommand(
         f"command '{cmd}': configuration resolved and validated, but this command is not "
-        "implemented in this build yet; use 'run', 'tax-compare', 'signals' or --print-config")
+        "implemented in this build yet; use 'run', 'tax-compare', 'delay-scan', "
+        "'threshold-scan', 'rebalance-scan', 'signals' or --print-config")

@@ -2,19 +2,20 @@
 
 Stan: **wszystkie cztery profile podatkowe (none, individual_pl, family_foundation_15/19 z
 tax_event=terminal) w centralnym pipeline + terminal settlement + pre-tax shadow run + metryki +
-summary.csv** (sesja 8) **oraz komenda `tax-compare`** (sesja 9). Zaimplementowane: CLI i API
+summary.csv** (sesja 8), **komenda `tax-compare`** (sesja 9) **oraz scany `delay-scan`,
+`threshold-scan`, `rebalance-scan`** (sesja 10). Zaimplementowane: CLI i API
 importu, konfiguracja, modele, kalendarz, dostępność informacji, loadery z normalizacją
 kanoniczną, walidacja (semantyka luk Q-012), pipeline sygnałów, ledger, koszty transakcyjne, cost
 basis (lots), centralny tygodniowy engine PORT-011, rebalancing
 `signal-only/weekly/monthly/quarterly/annually(yearly)/band`, sell_to_pay (TAX-006), finansowanie
 należności przy rebalancingu (TAX-007), moduł podatkowy `individual_pl` (`src/tax.py`), moduł
 fundacji (`src/foundation.py`), terminal settlement (`src/settlement.py`), pre-tax shadow run
-(Q-015), moduł metryk (`src/metrics.py`), `summary.csv` i orkiestrator `tax-compare`
-(`src/tax_compare.py`).
+(Q-015), moduł metryk (`src/metrics.py`), `summary.csv`, orkiestrator `tax-compare`
+(`src/tax_compare.py`) i scany (`src/scans.py`).
 Nie ma jeszcze: `tax.foundation.tax_event=distribution_schedule` (Q-037, jawny błąd),
 niezerowego internal trading tax fundacji (Q-047, jawny błąd), rolling_metrics.csv
-(MET-022/023, SHOULD), scanów (delay/threshold/rebalance), optimize, walk-forward. Te tryby
-kończą się kodem 3 z jawnym komunikatem (bez częściowych wyników).
+(MET-022/023, SHOULD), optimize (allocation grid, cele, tie-break Q-041), walk-forward. Te
+tryby kończą się kodem 3 z jawnym komunikatem (bez częściowych wyników).
 
 Źródło prawdy dla statusów: `compliance_matrix.csv`; pytania: `implementation_questions.csv`.
 
@@ -32,6 +33,12 @@ python work/backtest.py run --weights stocks=0.6,gold=0.2,btc=0.2 --tax-profile 
        --rebalance band --rebalance-band-pp 1 --start 2018-01-01 --end 2026-07-31
 python work/backtest.py tax-compare --config work/configs/tax_compare_s06.yaml \
        --tax-profile none,individual_pl,family_foundation_15,family_foundation_19   # S06 / CLI-006
+python work/backtest.py delay-scan --asset stocks --start 1971-01-01 --end 2026-07-31 --ma 50 \
+       --threshold 3 --confirm-weeks 2 --delay 1:4 --sell-fraction 0.5               # S02 / CLI-002
+python work/backtest.py threshold-scan --asset stocks --start 1971-01-01 --end 2026-07-31 \
+       --ma 50 --threshold 1:5:1 --confirm-weeks 2 --delay 1                          # S03 / CLI-003
+python work/backtest.py rebalance-scan --weights stocks=0.6,gold=0.2,btc=0.2 --band-pp 1,5 \
+       --start 2018-01-01 --end 2026-07-31                                           # S08 / CLI-010
 python work/tools/check_audit_consistency.py --allow-pass
 ```
 
@@ -41,7 +48,8 @@ python work/tools/check_audit_consistency.py --allow-pass
 Warstwy: `models`, `errors`, `config`, `calendar`, `availability`, `data_loader`, `validation`,
 `signals`, `confirmation`, `scheduling`, `signal_analysis`, `allocation`, `rf`, `costs`,
 `cost_basis`, `ledger`, `engine`, `rebalancing`, `sell_to_pay`, `tax`, `foundation`, `settlement`,
-`metrics`, `manifest`, `reporting`, `tax_compare` (orkiestrator nad `app.prepare_run` / `app.run_prepared`). `src` jest pakietem importowanym jako `src.*` (Q-044).
+`metrics`, `manifest`, `reporting`, `tax_compare` i `scans` (orkiestratory nad `app.prepare_run` /
+`app.run_prepared`). `src` jest pakietem importowanym jako `src.*` (Q-044).
 
 ## Decyzje implementacyjne
 
@@ -502,3 +510,84 @@ Warstwy: `models`, `errors`, `config`, `calendar`, `availability`, `data_loader`
     none = individual_pl = 3 999 110.48, fundacje 15/19 = 3 114 471.16; after_tax_terminal_wealth:
     none 3 999 110.48, individual_pl 3 251 509.53, fundacja 15% 2 615 887.69, fundacja 19%
     2 492 787.09.
+
+## Scany delay/threshold/rebalance (sesja 10)
+
+76. **Q-026 (RESOLVED) - jednostki**: CLI `--threshold`, `--threshold-off`, `--threshold-on`,
+    `--threshold-grid` i (przyszłe) gridy wag `--btc-weight`, `--gold-weight`, `--stocks-weight`,
+    `--rf-weight` są w procentach: `--threshold 3` = 0.03, `--threshold 0.03` = 0.0003 (0.03%) -
+    bez zgadywania intencji. Dziesiętnie: `--weights`, `--sell-fraction`, `--sortino-mar`. Punkty
+    procentowe: `--rebalance-band-pp`, `--band-pp` (1 = 1 pp). Config YAML/JSON: progi zawsze
+    jako ułamki dziesiętne (threshold-scan odrzuca grid z configu poza [0, 1)).
+77. **Składnia gridów**: `a:b:step` inclusive (b należy do gridu, gdy trafiony dokładnie; bez
+    step krok 1), listy nieregularne i mieszane (`1:3,8`); kolejność jak podana (bez
+    sortowania). Parsowanie w arytmetyce `Decimal` (`config.parse_decimal_grid`): wartości to
+    dokładne dziesiętne `start + i*step`, konwersja procent -> ułamek przez `Decimal / 100`, bez
+    arbitralnego zaokrąglania (`0:1:0.1` daje 0.3, `7.5` -> 0.075, `1.1` -> 0.011). Gridy
+    całkowite (delay, ma, confirmation) odrzucają wartości niecałkowite (1.5 -> błąd, nie
+    obcięcie). Resolved grid zapisany w `config_resolved.yaml` (`optimizer.*_grid`),
+    `scan_manifest.json` (`resolved_grid`, `grid_points`) i w każdym wierszu `grid_results.csv`.
+78. **Q-027 (RESOLVED) - precedencja**: CLI > `signals.<asset>.*` > `signal.*` >
+    `signals.default.*` > DEF-* (implementacja: warstwa CLI > plik > defaulty komendy > DEFAULTS,
+    w warstwie specyficzność asset > signal > default; DEF-* są w warstwie DEFAULTS). Defaulty
+    komend: delay-scan `optimizer.delay_grid` = 1:4; threshold-scan `optimizer.threshold_grid`
+    = 1:5:1 (0.01..0.05) z delay = skalarny delay aktywa (default 1, THR-003) - threshold-scan
+    nigdy nie używa `optimizer.delay_grid`; run delay = 1. Listy 1,2,4,8 i 0,1,2,3,5,7.5 są
+    przykładami składni. W scanach `--ma`, `--threshold`, `--confirm-weeks`, `--delay`,
+    `--sell-fraction` dotyczą tylko `--asset`.
+79. **Architektura scanu** (`src/scans.py`): `resolve_scan` rozwiązuje i waliduje cały grid
+    (unikalność, zakresy, całkowitość) i tworzy dla każdego punktu nowy `ResolvedConfig`
+    (`ResolvedConfig.with_overrides`) różniący się od configu scanu wyłącznie skanowanym kluczem
+    (sprawdzane porównaniem rozwiązanych configów); walidacja profilu (Q-037/Q-047) i aktywów
+    przed danymi. Potem jedno `app.prepare_run` i `app.run_prepared` na punkt:
+    `PreparedRun.inputs_for(cfg)` współdzieli obiekty danych (tygodnie, rynek, serie sygnałów) i
+    podmienia tylko pola strategii (parametry sygnału, cele, kapitał, koszty); każdy punkt ma
+    świeży portfel, cost basis, trackery sygnałów i stan podatkowy/fundacji (test: kolejność gridu
+    nie zmienia wierszy; wiersz delay=N = samodzielny `run` z delay=N).
+80. **Warm-up scanu (NORM-010/ERR-003)**: wymaganie = największe `ma + max(confirm_off,
+    confirm_on) + delay` spośród punktów gridu (delay-scan: max(delay grid); threshold i band
+    nie zmieniają warm-upu). Z `--start`: jeśli historia przed startem nie wystarcza dla
+    największego wymagania, cały scan kończy się ERR-003 przed wykonaniem gridu (bez cichego
+    przesuwania startu dla części punktów). Bez `--start`: pierwszy wspólny tydzień zakresu
+    wspólnego, przed którym każde aktywne aktywo ma to wymaganie (`app.first_warmup_week`,
+    `first_week_rule` w manifeście). Reguła `run` bez zmian (Q-013 OPEN).
+81. **delay-scan / threshold-scan (ALLOC-002)**: `--asset X` = strategia single-asset
+    (`allocation.single_asset = X`, sleeve 100%, RF tylko rezerwa risk-off, strategic rf 0);
+    `--weights`/`allocation.targets` z `--asset` to błąd (bez ukrytych wag); ładowane są tylko
+    FF, ceny sygnałowe X, dywidendy (jeśli profil ich wymaga) i CPI. delay-scan zmienia wyłącznie
+    `signals.X.delay_weeks` (wykonanie nominalnie w T+N, bez ukrytego +1); threshold-scan ustawia
+    symetrycznie `threshold_off = threshold_on = p` (nadpisuje asymetryczne progi z configu;
+    `--threshold-off/--threshold-on/--threshold-grid` w threshold-scan odrzucone), threshold 0
+    zachowuje ścisłe porównanie.
+82. **rebalance-scan (REB-010, ALLOC-001)**: pełny run wieloaktywowy z jawnymi wagami; każdy punkt
+    wymusza `portfolio.rebalance = band` i `portfolio.rebalance_band_pp` = wartość gridu (pp);
+    inne tryby rebalancingu nie są skanowane. `rebalance_count` = liczba faktycznych
+    `RebalanceEvent`.
+83. **grid_results.csv**: kolumny `scan_type, grid_index (1..n), asset, scanned_parameter,
+    scanned_value, delay_weeks, threshold_pct, threshold_decimal, band_pp, status,
+    rebalance_count, signal_exit_count, signal_reentry_count` (wartość skanowana w kolumnie
+    swojego scanu, pozostałe puste; liczby wyjść/powrotów = wykonane zmiany stanu efektywnego),
+    a po nich pełny `SUMMARY_FIELDS` runu punktu (pre-tax i after-tax, podatki, terminal
+    settlement - DELAY-005). Jeden wiersz na punkt resolved gridu, kolejność gridu, `status=ok`;
+    bez timestampu, celu, rankingu i „winnera”. Katalog scanu: `grid_results.csv`,
+    `scan_manifest.json`, `config_resolved.yaml`, `data_manifest.json`, `validation_report.csv`
+    (wspólne issues + issues runów oznaczone punktem gridu), `weekly_normalized.csv` (raz); bez
+    plików tygodniowych/transakcji/podatków per punkt.
+84. **prepared_input_sha256** (zmiana definicji, dotyczy też tax-compare): hash wyłącznie danych
+    i kalendarza widzianych przez engine (tygodnie, zwroty, RF, dywidendy i status, serie cen
+    sygnałowych, pierwszy tydzień, as_of, tryb dywidend, zakres wspólny, dropped weeks, okno CPI,
+    SHA256 źródeł); parametry strategii (sygnał, wagi, kapitał, koszty, band, profil) są poza
+    nim i zapisywane osobno. Dlatego delay-scan i threshold-scan tego samego aktywa/zakresu mają
+    ten sam hash; wartość S06 tax-compare zmieniła się na `dd030c03…` (summary.csv bez zmian).
+85. **Atomowość i postęp**: cały grid i configi walidowane przed danymi; błąd punktu w trakcie
+    runu (np. insolvency) przerywa scan jako `ScanError` z numerem i wartością punktu; wyniki
+    zapisywane po policzeniu wszystkich punktów, błąd zapisu usuwa katalog. Postęp (ERR-005) na
+    stderr po każdym punkcie (`performance.progress`), nigdy w plikach wyników. REPRO-006
+    pozostaje IN_PROGRESS do testu serial vs parallel optimizera.
+86. **Wyniki (staged data, profil none, as_of = data uruchomienia)**: S02 delay-scan stocks
+    1971-01-01..2026-07-31 (2901 tygodni, warm-up 56): delay 1/2/3/4 -> trade_count 34/34/34/35,
+    final_wealth_pre_tax 380 631 514.50 / 344 205 781.02 / 331 693 022.82 / 320 914 731.13, CAGR
+    11.28% / 11.08% / 11.00% / 10.94% (przy delay 4 dodatkowy powrót: wykonanie potwierdzenia z
+    1970-12-04 oczekujące na starcie, Q-019). S03 threshold-scan 1..5%: trade_count
+    54/40/34/30/30. S08 rebalance-scan 2018-01-05..2026-07-31 (448 tygodni): band 1 pp -> 170
+    rebalancingów, band 5 pp -> 20.

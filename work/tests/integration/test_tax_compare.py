@@ -178,9 +178,9 @@ def test_inputs_prepared_once_no_second_alignment(tmp_path, monkeypatch):
     calls = {"build_run": 0, "load_role": []}
     real_build, real_load = app.build_run, app.load_role
 
-    def build(cfg, dividend_mode=None):
+    def build(cfg, *args, **kw):
         calls["build_run"] += 1
-        return real_build(cfg, dividend_mode)
+        return real_build(cfg, *args, **kw)
 
     def load(cfg, role):
         calls["load_role"].append(role)

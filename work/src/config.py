@@ -11,6 +11,7 @@ import copy
 import datetime as dt
 import json
 import math
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Optional
 
@@ -100,9 +101,14 @@ DEFAULTS: dict = {
 
 # Q-027: command specific defaults layered between DEFAULTS and the config file.
 COMMAND_DEFAULTS: dict = {
-    "delay-scan": {"optimizer": {"delay_grid": [1, 2, 3, 4]}},                       # DELAY-002
-    "threshold-scan": {"optimizer": {"threshold_grid": [0.01, 0.02, 0.03, 0.04, 0.05],  # THR-002
-                                     "delay_grid": [1]}},                              # THR-003
+    # Q-027: the scan grids; threshold-scan keeps the scalar delay of the scanned asset
+    # (signals.<asset>.delay_weeks > signal.delay_weeks > DEF-004 = 1, THR-003) and never uses
+    # optimizer.delay_grid
+    "delay-scan": {"optimizer": {"delay_grid": [1, 2, 3, 4]},                          # DELAY-002
+                   "report": {"run_name": "delay_scan"}},
+    "threshold-scan": {"optimizer": {"threshold_grid": [0.01, 0.02, 0.03, 0.04, 0.05]},  # THR-002
+                       "report": {"run_name": "threshold_scan"}},
+    "rebalance-scan": {"report": {"run_name": "rebalance_scan"}},                       # REB-010
     # TAX-003/FND-008 (Q-023): the profile axis of tax-compare; both foundations side by side
     "tax-compare": {"tax": {"compare_profiles": ["none", "individual_pl", "family_foundation_15",
                                                  "family_foundation_19"]},
@@ -196,33 +202,80 @@ def parse_date(value, name: str) -> Optional[dt.date]:
         raise ConfigError(f"{name}: expected YYYY-MM-DD, got {value!r}") from exc
 
 
-def parse_grid(text, name: str = "grid") -> list:
-    """Range/list syntax used by the spec: 'a:b[:step]' (inclusive end) or 'x,y,z'
-    (DELAY-002/003, THR-002/005, OPT-002/003). Returns floats in the order given."""
-    if isinstance(text, (int, float)):
-        return [float(text)]
-    if isinstance(text, (list, tuple)):
-        return [float(x) for x in text]
+def parse_decimal_grid(text, name: str = "grid") -> list:
+    """Range/list syntax used by the spec (DELAY-002/003, THR-002/005, OPT-002/003, Q-026):
+    'a:b[:step]' is inclusive of b when b is reached exactly (step 1 when omitted), 'x,y,z' is
+    an irregular list; parts may be combined ('1:3,8'). Values are exact decimals in the order
+    given (no sorting, no rounding): every element is start + i*step computed in decimal
+    arithmetic, so '0:1:0.1' gives exactly 0.3, not 0.30000000000000004."""
+    if isinstance(text, bool):
+        raise ConfigError(f"{name}: number expected, got {text!r}")
+    if isinstance(text, (int, float, Decimal)):
+        parts = [str(text)]
+    elif isinstance(text, (list, tuple)):
+        parts = [str(x) for x in text]
+        if not parts:
+            raise ConfigError(f"{name}: empty grid")
+    else:
+        parts = [x.strip() for x in str(text).split(",")]
     out = []
-    for part in str(text).split(","):
-        part = part.strip()
+    for part in parts:
         if not part:
             raise ConfigError(f"{name}: empty element in {text!r}")
         try:
             if ":" in part:
-                bits = [float(x) for x in part.split(":")]
+                bits = [_decimal(x) for x in part.split(":")]
                 if len(bits) not in (2, 3):
                     raise ValueError
                 start, stop = bits[0], bits[1]
-                step = bits[2] if len(bits) == 3 else 1.0
+                step = bits[2] if len(bits) == 3 else Decimal(1)
                 if step <= 0 or stop < start:
                     raise ValueError
-                n = int(math.floor((stop - start) / step + 1e-9)) + 1
-                out.extend(round(start + i * step, 12) for i in range(n))
+                n = int((stop - start) // step) + 1
+                out.extend(start + i * step for i in range(n))
             else:
-                out.append(float(part))
-        except ValueError as exc:
+                out.append(_decimal(part))
+        except (ValueError, ArithmeticError) as exc:
             raise ConfigError(f"{name}: invalid range/list {text!r}") from exc
+    return out
+
+
+def _decimal(text) -> Decimal:
+    d = Decimal(str(text).strip())
+    if not d.is_finite():
+        raise ValueError(text)
+    return d
+
+
+def parse_grid(text, name: str = "grid") -> list:
+    """parse_decimal_grid as floats (each the nearest float to the exact decimal value)."""
+    return [float(d) for d in parse_decimal_grid(text, name)]
+
+
+def percent_grid(text, name: str = "grid") -> list:
+    """Q-026: a percent grid ('1:5:1', '0,1,2,3,5,7.5') as decimal fractions, converted in
+    decimal arithmetic: 3 -> 0.03, 7.5 -> 0.075, 0.03 -> 0.0003 (never guessed)."""
+    return [float(d / 100) for d in parse_decimal_grid(text, name)]
+
+
+def percent_value(text, name: str) -> float:
+    """Q-026: one percent value as a decimal fraction ('3' -> 0.03, '0.03' -> 0.0003)."""
+    try:
+        if isinstance(text, bool) or (isinstance(text, str) and ("," in text or ":" in text)):
+            raise ValueError(text)
+        return float(_decimal(text) / 100)
+    except (ValueError, ArithmeticError) as exc:
+        raise ConfigError(f"{name}: a single number (percent) expected, got {text!r}") from exc
+
+
+def int_grid(text, name: str = "grid", minimum: int = 1) -> list:
+    """An integer grid (delays, MA lengths, confirmation weeks): every value must be an
+    integer >= minimum ('1:4' -> 1,2,3,4; '1,2,4,8'); 1.5 is an error, never truncated."""
+    out = []
+    for d in parse_decimal_grid(text, name):
+        if d != d.to_integral_value() or d < minimum:
+            raise ConfigError(f"{name}: integers >= {minimum} expected, got {d} in {text!r}")
+        out.append(int(d))
     return out
 
 
@@ -319,6 +372,15 @@ class ResolvedConfig:
 
     def provenance(self) -> dict:
         return {k: self.source_of(k) for k in sorted(flatten(self.data))}
+
+    def with_overrides(self, updates: dict) -> "ResolvedConfig":
+        """A new configuration with ``updates`` (dotted key -> value) on top of the CLI layer
+        (highest precedence); this configuration is not changed (tax-compare profiles, scan
+        grid points)."""
+        cli = copy.deepcopy(self.layers["cli"])
+        for key, value in updates.items():
+            set_path(cli, key, value)
+        return ResolvedConfig(self.command, self.layers["file"], cli, self.config_path)
 
     # -- signals
     def _signal_lookup(self, asset: str, key: str, fallbacks=()) -> tuple:

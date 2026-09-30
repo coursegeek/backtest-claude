@@ -144,9 +144,9 @@ def test_run_cli_exit_codes(tmp_path):
                                    "distribution_schedule"], capture_output=True, text=True)
     assert taxed.returncode == 3 and "distribution_schedule is not implemented; Q-037 remains open" \
         in taxed.stderr
-    scan = subprocess.run([sys.executable, str(WORK / "backtest.py"), "delay-scan", "--asset", "stocks"],
-                          capture_output=True, text=True)
-    assert scan.returncode == 3 and "not implemented" in scan.stderr
+    opt = subprocess.run([sys.executable, str(WORK / "backtest.py"), "optimize", "--start",
+                          "2018-01-01"], capture_output=True, text=True, cwd=str(tmp_path))
+    assert opt.returncode == 3 and "not implemented" in opt.stderr
 
 
 def test_end_defaults_to_last_common_week():

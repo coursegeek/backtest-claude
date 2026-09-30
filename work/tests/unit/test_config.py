@@ -93,7 +93,8 @@ def test_command_specific_defaults():
     assert ResolvedConfig("delay-scan").get("optimizer.delay_grid") == [1, 2, 3, 4]
     t = ResolvedConfig("threshold-scan")
     assert t.get("optimizer.threshold_grid") == [0.01, 0.02, 0.03, 0.04, 0.05]
-    assert t.get("optimizer.delay_grid") == [1]
+    assert t.get("optimizer.delay_grid") is None           # THR-003: scalar delay, no grid
+    assert t.signal_params("stocks").delay == 1
 
 
 def test_cli_units_percent_vs_decimal():
