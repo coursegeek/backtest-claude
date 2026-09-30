@@ -13,9 +13,10 @@ Implemented in this build:
 A run is split into data preparation (``prepare_run``: load, validate and align every source,
 CPI window included) and execution (``run_prepared``: engine, terminal settlement, pre-tax
 shadow, metrics, outputs); execution never reloads or realigns data.
-Everything else (optimize, walk-forward, distribution_schedule, foundation internal trading
-tax > 0) resolves and validates its configuration and then stops with a clear
-NotImplementedCommand; no partial results are produced.
+  * ``optimize``    - in-sample weight-grid optimizer (``optimizer.py``, OPT-001..010, Q-041).
+Everything else (walk-forward, distribution_schedule, foundation internal trading tax > 0)
+resolves and validates its configuration and then stops with a clear NotImplementedCommand;
+no partial results are produced.
 """
 from __future__ import annotations
 
@@ -206,15 +207,17 @@ class PreparedRun:
 
     def inputs_for(self, cfg: ResolvedConfig) -> EngineInputs:
         """EngineInputs of one configuration on this prepared input: the data objects (weeks,
-        market, signal series) are shared, only the strategy fields (signal parameters,
-        targets, capital, costs, cost basis) come from ``cfg``; the prepared object itself is
-        returned when they are identical. The configuration must use the prepared assets and
-        must not need more warm-up than was verified."""
+        market, signal series) are shared, only the strategy fields (signal parameters of the
+        configuration's active assets, targets, capital, costs, cost basis) come from ``cfg``;
+        the prepared object itself is returned when they are identical. The active assets
+        must be prepared (a subset of an optimizer's asset union is fine) and must not need
+        more warm-up than was verified."""
         targets = strategic_targets(cfg)
         assets = active_risky_assets(targets)
-        if assets != canonical_assets(self.inputs.params):
+        prepared_assets = canonical_assets(self.inputs.params)
+        if not set(assets) <= set(prepared_assets):
             raise ConfigError(f"configuration uses assets {assets}, the prepared input holds "
-                              f"{canonical_assets(self.inputs.params)}")
+                              f"only {prepared_assets}")
         params = {a: cfg.signal_params(a) for a in assets}
         if cfg.get("signal.initial_state") != "RISK_ON":
             for a in assets:
@@ -329,7 +332,8 @@ def dividend_status_issues(cfg, weeks, div) -> list:
 
 
 def build_run(cfg: ResolvedConfig, dividend_mode: Optional[str] = None,
-              warmup_params: Optional[dict] = None, auto_start: bool = False):
+              warmup_params: Optional[dict] = None, auto_start: bool = False,
+              assets: Optional[tuple] = None):
     """Load, validate and align every source of a portfolio run; returns EngineInputs and
     the run context (NORM-011, NORM-019, Q-012, Q-014). ``dividend_mode`` overrides the data
     requirement of the configured profile: ``tax-compare`` passes the superset requirement of
@@ -338,10 +342,17 @@ def build_run(cfg: ResolvedConfig, dividend_mode: Optional[str] = None,
     requirement (NORM-010/ERR-003): a scan passes the largest requirement of its grid so that
     one calendar is valid for every grid point. ``auto_start`` (scans only): without run.start
     the first return week is the first week of the common range at which every asset has that
-    warm-up (never a later start for only some grid points)."""
+    warm-up (never a later start for only some grid points). ``assets`` (optimize): the
+    union of the risky assets of every candidate; every source of the union bounds the one
+    common calendar of all candidates and the prepared input carries no strategic targets
+    (each candidate brings its own, ``PreparedRun.inputs_for``)."""
     check_supported_run(cfg)
-    targets = strategic_targets(cfg)
-    assets = active_risky_assets(targets)
+    if assets is None:
+        targets = strategic_targets(cfg)
+        assets = active_risky_assets(targets)
+    else:
+        targets = None
+        assets = canonical_assets(assets)
     as_of = cfg.as_of()
     report = ValidationReport()
     dropped = 0
@@ -561,11 +572,12 @@ def load_cpi_window(cfg: ResolvedConfig, inception, last_week, report):
 
 
 def prepare_run(cfg: ResolvedConfig, dividend_mode: Optional[str] = None,
-                warmup_params: Optional[dict] = None, auto_start: bool = False) -> PreparedRun:
+                warmup_params: Optional[dict] = None, auto_start: bool = False,
+                assets: Optional[tuple] = None) -> PreparedRun:
     """Data preparation of a portfolio run: sources, calendar, EngineInputs and the CPI window
-    of the retained range (REAL-001..004). ``dividend_mode``, ``warmup_params`` and
-    ``auto_start`` - see ``build_run``."""
-    inputs, ctx = build_run(cfg, dividend_mode, warmup_params, auto_start)
+    of the retained range (REAL-001..004). ``dividend_mode``, ``warmup_params``,
+    ``auto_start`` and ``assets`` - see ``build_run``."""
+    inputs, ctx = build_run(cfg, dividend_mode, warmup_params, auto_start, assets)
     report = ctx.pop("report")
     cpi, window = load_cpi_window(cfg, inception_date(ctx["first_week"]), inputs.weeks[-1], report)
     if cpi is not None:
@@ -601,7 +613,7 @@ def prepared_input_sha256(prepared: PreparedRun) -> str:
 
 def check_prepared_for(cfg: ResolvedConfig, prepared: PreparedRun) -> None:
     """A profile may only run on a prepared input that carries the data it needs."""
-    need = dividend_mode_of(cfg, canonical_assets(prepared.inputs.params))
+    need = dividend_mode_of(cfg, active_risky_assets(strategic_targets(cfg)))
     if need != "none" and need != prepared.dividend_mode:
         raise ConfigError(f"tax.profile={cfg.get('tax.profile')} needs dividend data "
                           f"({need}) but the prepared input carries {prepared.dividend_mode}")
@@ -767,6 +779,9 @@ def dispatch(cfg: ResolvedConfig):
     if cmd in ("delay-scan", "threshold-scan", "rebalance-scan"):
         from .scans import run_scan
         return run_scan(cfg)
+    if cmd == "optimize":
+        from .optimizer import run_optimize
+        return run_optimize(cfg)
     raise NotImplementedCommand(
         f"command '{cmd}': configuration resolved and validated, but this command is not "
         "implemented in this build yet; use 'run', 'tax-compare', 'delay-scan', "

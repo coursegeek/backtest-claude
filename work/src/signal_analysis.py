@@ -12,9 +12,10 @@ pre-start reconstruction and the portfolio engine. Per observed week K of one as
 """
 from __future__ import annotations
 
+import copy
 import datetime as dt
 import math
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass
 
 from .availability import assert_available, evaluation_time
@@ -30,11 +31,24 @@ class SignalTracker:
 
     def __init__(self, params: SignalParams):
         self.params = params
-        self.window = deque(maxlen=params.ma)       # (week_key, price) of the last ma observations
+        self.keys = deque(maxlen=params.ma)         # week keys of the last ma observations
+        self.prices = deque(maxlen=params.ma)       # their prices (SMA window)
+        self.gaps = 0                               # non-weekly steps inside the window
         self.machine = MachineState()
         self.queue = ExecutionQueue(params.asset, State.RISK_ON)
         self.observed = 0
         self.last_key = None
+
+    def _push(self, key: dt.date, price: float) -> None:
+        """Append one observation to the SMA window, keeping the count of calendar gaps
+        between consecutive window keys (integer bookkeeping only)."""
+        keys = self.keys
+        if len(keys) == keys.maxlen and keys[1] - keys[0] != WEEK:
+            self.gaps -= 1                          # the leaving pair
+        if keys and key - keys[-1] != WEEK:
+            self.gaps += 1                          # the entering pair
+        keys.append(key)
+        self.prices.append(price)
 
     @property
     def effective_state(self) -> State:
@@ -44,18 +58,19 @@ class SignalTracker:
         """Executions whose execution_week <= week, FIFO: [(ScheduledExecution, is_noop)]."""
         return self.queue.due(week)
 
-    def observe(self, point, executed=()) -> SignalRecord:
+    def observe(self, point, executed=(), record: bool = True):
+        """End-of-week update; returns the SignalRecord (None when ``record`` is False - the
+        pre-start reconstruction discards its records, the state update is identical)."""
         p = self.params
         if self.last_key is not None and point.week_key <= self.last_key:
             raise ValueError(f"{p.asset}: observations must be strictly increasing")
         assert_available(point, evaluation_time(point.week_key), f"{p.asset}: ")
-        self.window.append((point.week_key, point.price))
+        self._push(point.week_key, point.price)
         flags = []
         s = None
-        if len(self.window) == p.ma:
-            s = math.fsum(x for _, x in self.window) / p.ma      # SIG-001, Q-050
-            keys = [k for k, _ in self.window]
-            if any(b - a != WEEK for a, b in zip(keys, keys[1:])):
+        if len(self.prices) == p.ma:
+            s = math.fsum(self.prices) / p.ma                    # SIG-001, Q-050
+            if self.gaps:
                 flags.append("sma_spans_gap")
         lower, upper = bands(s, p.threshold_off, p.threshold_on)
         cond = classify(point.price, lower, upper)
@@ -63,6 +78,10 @@ class SignalTracker:
         scheduled = None
         if confirmed is not None:
             scheduled = self.queue.schedule(point.week_key, p.delay, confirmed).execution_week
+        if not record:
+            self.observed += 1
+            self.last_key = point.week_key
+            return None
         exec_target = next((ex.target_state for ex, noop in reversed(executed) if not noop), None)
         all_flags = (tuple(step_flags) + tuple(flags)
                      + tuple(f"execution_noop:{ex.confirm_week}" for ex, noop in executed if noop)
@@ -108,16 +127,39 @@ class PreStartState:
     issues: tuple = ()
 
 
+# Pre-start reconstructions are pure functions of (price points, parameters, first week); every
+# grid point / profile / shadow run on one prepared input repeats the same one. The memo keeps
+# the reconstructed tracker and hands out deep copies, so no run shares mutable state and the
+# result is identical to replaying the history. The key holds the (immutable) points tuple
+# itself, so a different series can never hit another series' entry.
+_RECONSTRUCTION_MEMO: "OrderedDict" = OrderedDict()
+_MEMO_SIZE = 64
+
+
 def reconstruct_tracker(series, params: SignalParams, first_week: dt.date):
     """Rebuild the tracker on the whole history before ``first_week`` (Q-012 point 3).
     Executions scheduled before ``first_week`` only set the effective state (no trades,
     SIG-019); later ones stay pending and become in-backtest trades (Q-019).
-    Returns (tracker, PreStartState)."""
+    Returns (tracker, PreStartState); the tracker is always a private object."""
+    points = series.points
+    key = (id(points), params, first_week)
+    hit = _RECONSTRUCTION_MEMO.get(key)
+    if hit is not None and hit[0] is points:
+        _RECONSTRUCTION_MEMO.move_to_end(key)
+        return copy.deepcopy(hit[1]), hit[2]
+    tracker, state = _reconstruct_tracker(points, params, first_week)
+    _RECONSTRUCTION_MEMO[key] = (points, copy.deepcopy(tracker), state)
+    while len(_RECONSTRUCTION_MEMO) > _MEMO_SIZE:
+        _RECONSTRUCTION_MEMO.popitem(last=False)
+    return tracker, state
+
+
+def _reconstruct_tracker(points, params: SignalParams, first_week: dt.date):
     tracker = SignalTracker(params)
-    for p in series.points:
+    for p in points:
         if p.week_key >= first_week:
             break
-        tracker.observe(p, tracker.due(p.week_key))
+        tracker.observe(p, tracker.due(p.week_key), record=False)
     tracker.due(first_week - dt.timedelta(days=1))
     issues = []
     ms = tracker.machine

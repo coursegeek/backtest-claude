@@ -53,7 +53,7 @@ def test_cli_007_bare_command_fails_with_alloc_001():
 
 def test_portfolio_commands_validate_then_stop():
     """Commands outside this build resolve/validate their config and stop with exit 3."""
-    r = cli("optimize", "--btc-weight", "0:25:1", "--gold-weight", "0:25:1")
+    r = cli("optimize", "--optimization-mode", "walk-forward", "--btc-weight", "0:25:1")
     assert r.returncode == 3 and "not implemented" in r.stderr
     r = cli("rebalance-scan", "--band-pp", "1,5")
     assert r.returncode == 2 and "ALLOC-001" in r.stderr

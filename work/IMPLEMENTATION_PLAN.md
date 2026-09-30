@@ -62,7 +62,7 @@ Mapa każdego wymagania na moduł/test jest w `work/compliance_matrix.csv`.
 | metrics | `src/metrics.py` | CAGR, after-tax CAGR, real, vol, Sharpe, Sortino, maxDD, Calmar, lata kalendarzowe, turnover, czas w stanie, rolling | MET-*, REAL-001..003, REB-005 | I/O |
 | reporting | `src/reporting.py`, `src/manifest.py` | `summary.csv`, `weekly_portfolio.csv`, `trades.csv`, `tax_events.csv`, `signals.csv`, `config_resolved.yaml`, `data_manifest.json`, `validation_report.csv`, `grid_results.csv`, `walk_forward_results.csv`, `weekly_normalized.csv`, `rolling_metrics.csv`, tabela w konsoli | REP-*, REPRO-*, NORM-007 | obliczeń metryk |
 | scany (sesja 10) | `src/scans.py` | `delay-scan`, `threshold-scan`, `rebalance-scan`: rozwiązanie i walidacja całego gridu przed danymi, configi wariantów różniące się tylko skanowanym parametrem, jedno `prepare_run` z największym warm-upem gridu, `run_prepared` na punkt, `grid_results.csv` (kolumny scanu + `SUMMARY_FIELDS`), `scan_manifest.json`, atomowość, postęp na stderr | DELAY-001..005, THR-001..005, REB-010, REP-010, ALLOC-002, CLI-002/003/010 | własnego silnika, ładowania danych per punkt, celu/rankingu |
-| optimization | `src/optimizer.py` | gridy wag (procenty, Q-026), walidacja sum, cele, limit DD, tie-break (Q-041), równoległość z deterministycznym scaleniem; parser zakresów `a:b:step` jest w `src/config.py` | OPT-*, ERR-005/006 | logiki portfela |
+| optimization (sesja 11) | `src/optimizer.py` | in-sample: grid wag (procenty, Q-026) i walidacja sum (Q-041) przed danymi, unia aktywów przygotowana raz, `run_prepared` na kandydata (pula procesów `--jobs`), statusy, mapa celów, limit DD, tie-break, `grid_results.csv` + `summary.csv` + `selected/` + `optimizer_manifest.json`; parser zakresów `a:b:step` jest w `src/config.py` | OPT-001..010, TEST-009, ERR-005/006, REPRO-006 | własnego silnika, ładowania danych per kandydat |
 | walk-forward | `src/walk_forward.py` | okna rolling/anchored, krok, ostatnie okno częściowe, wybór parametrów na train, sklejanie OOS z ciągłym stanem, `walk_forward_rebalance` | WF-*, REP-016 | danych z okna test w treningu |
 
 ### Graf zależności (bez cykli)
@@ -78,7 +78,7 @@ rebalancing, sell_to_pay (ledger + costs + cost_basis)
 engine (orkiestracja wszystkich powyższych)
 metrics (czyste funkcje na RunResult)   reporting/manifest (I/O)
 optimizer ─ walk_forward (wywołują wyłącznie engine)
-app (prepare_run / run_prepared) ─ tax_compare, scans (orkiestracja; bez engine/tax/settlement)
+app (prepare_run / run_prepared) ─ tax_compare, scans, optimizer (orkiestracja; bez engine/tax/settlement)
 config/cli/backtest.py (wejście)
 ```
 
@@ -271,7 +271,7 @@ za przełącznikami configu i opisane w `IMPLEMENTATION_NOTES.md`.
 5. `rebalancing`, `sell_to_pay` (TEST-030/045/053/054).
 6. `tax`, `settlement` (TEST-010..017/032..035/046..048/050/052).
 7. `metrics`, `reporting`, `manifest` (TEST-020/022/024/036/043).
-8. `tax-compare` (sesja 9, CLI-006); scany (sesja 10, CLI-002/003/010); `optimizer` (TEST-009, CLI-004/005/009).
+8. `tax-compare` (sesja 9, CLI-006); scany (sesja 10, CLI-002/003/010); `optimizer` in-sample (sesja 11, TEST-009, CLI-004/005).
 9. `walk_forward` (TEST-021/037/049, CLI-011).
 10. Pełny przebieg testów, aktualizacja compliance matrix, `IMPLEMENTATION_NOTES.md`, `python tools/freeze_v2.py`.
 

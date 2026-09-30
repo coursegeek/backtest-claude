@@ -100,3 +100,17 @@ def test_scans_are_an_orchestrator():
     for mod in ("engine", "tax", "foundation", "settlement", "metrics", "reporting", "app",
                 "config", "cli", "tax_compare"):
         assert "scans" not in imports(mod) or mod == "app", mod
+
+
+def test_optimizer_is_an_orchestrator():
+    """OPT-001: optimize orchestrates app.prepare_run / app.run_prepared (one data preparation,
+    one production run per candidate); no engine, data loading, tax or metrics of its own."""
+    assert imports("optimizer") <= {"app", "config", "errors", "manifest", "models",
+                                    "reporting", "validation"}
+    text = (SRC / "optimizer.py").read_text(encoding="utf-8")
+    for word in ("run_engine", "load_role", "compute_run_metrics", "settle_terminal",
+                 "read_csv", "open("):
+        assert word not in text, word
+    for mod in ("engine", "tax", "foundation", "settlement", "metrics", "reporting", "config",
+                "cli", "scans", "tax_compare"):
+        assert "optimizer" not in imports(mod), mod

@@ -95,7 +95,7 @@ DEFAULTS: dict = {
                   "window_type": "rolling", "parameters": ["weights"],
                   "tie_break": ["objective", "lower_maxDD", "lower_turnover",
                                 "lexicographic_weights"]},
-    "performance": {"jobs": 1, "progress": True, "cache": False},
+    "performance": {"jobs": "auto", "progress": True, "cache": False},      # ERR-006: auto
     "report": {"output_dir": "results", "run_name": "run"},
 }
 
@@ -109,6 +109,7 @@ COMMAND_DEFAULTS: dict = {
     "threshold-scan": {"optimizer": {"threshold_grid": [0.01, 0.02, 0.03, 0.04, 0.05]},  # THR-002
                        "report": {"run_name": "threshold_scan"}},
     "rebalance-scan": {"report": {"run_name": "rebalance_scan"}},                       # REB-010
+    "optimize": {"report": {"run_name": "optimize"}},                                   # OPT-001
     # TAX-003/FND-008 (Q-023): the profile axis of tax-compare; both foundations side by side
     "tax-compare": {"tax": {"compare_profiles": ["none", "individual_pl", "family_foundation_15",
                                                  "family_foundation_19"]},
@@ -512,6 +513,11 @@ def validate(cfg: ResolvedConfig) -> None:
     asset = cfg.get("run.asset")
     if asset is not None and asset not in RISKY_ASSETS:
         raise ConfigError(f"run.asset: {asset!r} not in stocks,gold,btc")
+    jobs = cfg.get("performance.jobs")
+    if not (jobs == "auto" or (isinstance(jobs, int) and not isinstance(jobs, bool)
+                               and (jobs >= 1 or jobs == -1))):
+        raise ConfigError(f"performance.jobs / --jobs: 1..N, -1 (all CPUs) or auto, got {jobs!r} "
+                          "(ERR-006)")
     for name in ("run.start", "run.end", "run.as_of_date"):
         parse_date(cfg.get(name), name)
     if cfg.start and cfg.end and cfg.start > cfg.end:

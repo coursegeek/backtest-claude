@@ -145,7 +145,8 @@ def test_run_cli_exit_codes(tmp_path):
     assert taxed.returncode == 3 and "distribution_schedule is not implemented; Q-037 remains open" \
         in taxed.stderr
     opt = subprocess.run([sys.executable, str(WORK / "backtest.py"), "optimize", "--start",
-                          "2018-01-01"], capture_output=True, text=True, cwd=str(tmp_path))
+                          "2018-01-01", "--optimization-mode", "walk-forward"],
+                         capture_output=True, text=True, cwd=str(tmp_path))
     assert opt.returncode == 3 and "not implemented" in opt.stderr
 
 

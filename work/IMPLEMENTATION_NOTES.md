@@ -2,8 +2,8 @@
 
 Stan: **wszystkie cztery profile podatkowe (none, individual_pl, family_foundation_15/19 z
 tax_event=terminal) w centralnym pipeline + terminal settlement + pre-tax shadow run + metryki +
-summary.csv** (sesja 8), **komenda `tax-compare`** (sesja 9) **oraz scany `delay-scan`,
-`threshold-scan`, `rebalance-scan`** (sesja 10). Zaimplementowane: CLI i API
+summary.csv** (sesja 8), **komenda `tax-compare`** (sesja 9), **scany `delay-scan`,
+`threshold-scan`, `rebalance-scan`** (sesja 10) **oraz in-sample `optimize`** (sesja 11). Zaimplementowane: CLI i API
 importu, konfiguracja, modele, kalendarz, dostępność informacji, loadery z normalizacją
 kanoniczną, walidacja (semantyka luk Q-012), pipeline sygnałów, ledger, koszty transakcyjne, cost
 basis (lots), centralny tygodniowy engine PORT-011, rebalancing
@@ -11,10 +11,10 @@ basis (lots), centralny tygodniowy engine PORT-011, rebalancing
 należności przy rebalancingu (TAX-007), moduł podatkowy `individual_pl` (`src/tax.py`), moduł
 fundacji (`src/foundation.py`), terminal settlement (`src/settlement.py`), pre-tax shadow run
 (Q-015), moduł metryk (`src/metrics.py`), `summary.csv`, orkiestrator `tax-compare`
-(`src/tax_compare.py`) i scany (`src/scans.py`).
+(`src/tax_compare.py`), scany (`src/scans.py`) i optimizer in-sample (`src/optimizer.py`).
 Nie ma jeszcze: `tax.foundation.tax_event=distribution_schedule` (Q-037, jawny błąd),
 niezerowego internal trading tax fundacji (Q-047, jawny błąd), rolling_metrics.csv
-(MET-022/023, SHOULD), optimize (allocation grid, cele, tie-break Q-041), walk-forward. Te
+(MET-022/023, SHOULD), walk-forward (`optimize --optimization-mode walk-forward`, Q-022). Te
 tryby kończą się kodem 3 z jawnym komunikatem (bez częściowych wyników).
 
 Źródło prawdy dla statusów: `compliance_matrix.csv`; pytania: `implementation_questions.csv`.
@@ -39,6 +39,12 @@ python work/backtest.py threshold-scan --asset stocks --start 1971-01-01 --end 2
        --ma 50 --threshold 1:5:1 --confirm-weeks 2 --delay 1                          # S03 / CLI-003
 python work/backtest.py rebalance-scan --weights stocks=0.6,gold=0.2,btc=0.2 --band-pp 1,5 \
        --start 2018-01-01 --end 2026-07-31                                           # S08 / CLI-010
+python work/backtest.py optimize --start 2018-01-01 --end 2026-07-31 --btc-weight 0:25:1 \
+       --gold-weight 0:25:1 --stocks-weight remainder --objective cagr               # S04 / CLI-004
+python work/backtest.py optimize --start 2018-01-01 --end 2026-07-31 --btc-weight 0:25:1 \
+       --gold-weight 0:25:1 --stocks-weight remainder --objective after_tax_cagr \
+       --tax-profile individual_pl --dividend-tax-mode smoothed_weekly \
+       --dividend-file SPX_dividend_return_weekly_1970_2026.csv                       # S05 / CLI-005
 python work/tools/check_audit_consistency.py --allow-pass
 ```
 
@@ -48,8 +54,8 @@ python work/tools/check_audit_consistency.py --allow-pass
 Warstwy: `models`, `errors`, `config`, `calendar`, `availability`, `data_loader`, `validation`,
 `signals`, `confirmation`, `scheduling`, `signal_analysis`, `allocation`, `rf`, `costs`,
 `cost_basis`, `ledger`, `engine`, `rebalancing`, `sell_to_pay`, `tax`, `foundation`, `settlement`,
-`metrics`, `manifest`, `reporting`, `tax_compare` i `scans` (orkiestratory nad `app.prepare_run` /
-`app.run_prepared`). `src` jest pakietem importowanym jako `src.*` (Q-044).
+`metrics`, `manifest`, `reporting`, `tax_compare`, `scans` i `optimizer` (orkiestratory nad
+`app.prepare_run` / `app.run_prepared`). `src` jest pakietem importowanym jako `src.*` (Q-044).
 
 ## Decyzje implementacyjne
 
@@ -591,3 +597,85 @@ Warstwy: `models`, `errors`, `config`, `calendar`, `availability`, `data_loader`
     1970-12-04 oczekujące na starcie, Q-019). S03 threshold-scan 1..5%: trade_count
     54/40/34/30/30. S08 rebalance-scan 2018-01-05..2026-07-31 (448 tygodni): band 1 pp -> 170
     rebalancingów, band 5 pp -> 20.
+
+## Optimizer in-sample (sesja 11)
+
+87. **Q-041 (RESOLVED) - wagi**: `stocks = remainder` -> dla każdej kombinacji stocks = 1 - btc
+    - gold - rf (arytmetyka dziesiętna na wartościach gridu); stocks < -1e-12 -> kombinacja
+    odrzucona (`rejected_weight_sum_gt_1`), wartość w [-1e-12, 0) ustawiona na dokładne 0,
+    poprawny remainder zawsze sumuje się do 1. Jawny grid stocks: sum = stocks + gold + btc + rf,
+    kwalifikuje się tylko |sum - 1| <= 1e-12 (ALLOC-001); > 1 -> `rejected_weight_sum_gt_1`,
+    < 1 -> `rejected_weight_sum_lt_1`; brakująca część nigdy nie trafia do RF. Jednostki
+    (Q-026): `--btc-weight`, `--gold-weight`, `--stocks-weight` (grid), `--rf-weight` (stała,
+    OPT-005) i `--max-drawdown-limit` w procentach; config dziesiętnie.
+88. **Grid**: iloczyn kartezjański btc (zewnętrzny) x gold x stocks (tylko jawny grid), rf
+    stały; każda kombinacja ma stabilny `grid_index` 1..n (niezależny od workerów, czasu i
+    objective). Cały grid budowany i walidowany przed danymi; brak wagowo poprawnej kombinacji
+    -> ConfigError bez ładowania danych. Odrzucone kombinacje zostają w `grid_results.csv` z
+    wagami, statusem i powodem, z pustymi metrykami, i nigdy nie uruchamiają engine.
+89. **Wspólny kalendarz (unia aktywów)**: unia aktywów o dodatniej wadze we wszystkich
+    wagowo poprawnych kandydatach (`optimizer_manifest.required_assets_union`) jest
+    przygotowana raz (`app.prepare_run(assets=union)`): każde źródło unii ogranicza jeden
+    wspólny kalendarz, więc kandydat z btc = 0 nie dostaje dłuższego zakresu niż kandydat z
+    btc > 0. `PreparedRun.inputs_for` tworzy EngineInputs kandydata (jego wagi, jego aktywne
+    aktywa, ich SignalParams) na współdzielonych tygodniach, rynku i seriach sygnałów.
+    Przykład: `--end 2013-12-31 --btc-weight 0,10 --gold-weight 0` -> oba kandydaty 2012-07-06
+    ..2013-12-27 (78 tygodni, start po warm-upie BTC), ten sam `prepared_input_sha256`; kandydat
+    btc = 0 przygotowany osobno startowałby 1926-07-02. Bez `--start` optimizer (jak scany)
+    wybiera pierwszy wspólny tydzień z pełnym warm-upem unii.
+90. **Objective (OPT-007)**: cagr -> `cagr`, after_tax_cagr -> `after_tax_cagr`,
+    terminal_wealth -> `final_wealth_pre_tax` (pre-tax shadow z niepodatkowymi kosztami fundacji,
+    nigdy `pre_terminal_nav`), after_tax_terminal_wealth -> `after_tax_terminal_wealth`, sharpe,
+    sortino, calmar - maksymalizowane; min_drawdown -> `max_drawdown`, minimalizowane
+    (`objective_value` pokazuje dodatni max_drawdown, bez sztucznego minusa). Metryka None/NaN
+    -> `objective_unavailable` (nigdy 0), kandydat zostaje w gridzie, nie bierze udziału w wyborze.
+91. **Limit drawdownu (OPT-008)**: relevant drawdown = `after_tax_max_drawdown` dla
+    after_tax_cagr i after_tax_terminal_wealth, `max_drawdown` dla pozostałych; kwalifikuje
+    się relevant <= limit (równy przechodzi); przekroczenie -> `rejected_drawdown_limit` z
+    pełnymi metrykami. Brak kandydata eligible -> `OptimizerError` "no eligible optimization
+    candidate" (kod 4), bez żadnych plików.
+92. **Tie-break (OPT-009, Q-041)**: wybór = minimum krotki (objective zanegowany dokładnie dla
+    celów maksymalizowanych, relevant max drawdown, turnover, (btc, gold, rf, stocks)); bez
+    zaokrągleń i tolerancji - kolejne kryterium decyduje tylko przy dokładnej równości. Wybór
+    wykonywany po złożeniu wszystkich wierszy w kolejności grid_index (niezależny od kolejności
+    ukończenia, workera i wejścia; krotka wag jest unikalna, więc porządek jest ścisły).
+93. **Wiersz grid_results.csv**: `grid_index, status, rejection_reason, eligible, selected,
+    weight_stocks, weight_gold, weight_btc, weight_rf, weight_sum, objective,
+    objective_direction, objective_metric, objective_value, relevant_drawdown_metric,
+    relevant_max_drawdown, max_drawdown_limit` + pełne `SUMMARY_FIELDS` kandydata (puste dla
+    odrzuconych wagowo). Statusy: ok, rejected_weight_sum_gt_1, rejected_weight_sum_lt_1,
+    rejected_drawdown_limit, objective_unavailable. Dokładnie jeden `selected = true`.
+94. **Wyjścia**: `grid_results.csv`, `summary.csv` (wiersz `SUMMARY_FIELDS` wybranego
+    kandydata), `selected/` (standardowe artefakty wybranego runu z już policzonego
+    `PortfolioRunResult` - bez ponownego runu), `optimizer_manifest.json` (objective, kierunek,
+    tie-break, limit, liczniki raw/weight-valid/evaluated/eligible/rejected/selected, wybrany
+    punkt, unia aktywów, hash, zakres, dropped weeks, as_of, jobs, źródła, kontrole),
+    `config_resolved.yaml`, `selected_config_resolved.yaml`, `data_manifest.json`,
+    `validation_report.csv` (wspólne issues + różne issues runów raz, z liczbą kandydatów),
+    `weekly_normalized.csv`. Brak plików tygodniowych dla wszystkich kandydatów.
+95. **Równoległość (ERR-006)**: `--jobs 1` sekwencyjnie, N > 1 pula procesów N, `-1` / `auto`
+    (domyślnie, zgodnie ze spec ERR-006; wcześniej default 1) = dostępne CPU, `0` i `< -1` ->
+    ConfigError; nigdy więcej workerów niż kandydatów. Dane przygotowane raz w procesie
+    nadrzędnym; worker dostaje przygotowane wejście raz (initializer, `fork` gdy dostępny),
+    nie czyta plików, nie buduje kalendarza, nie zapisuje plików i nie tworzy timestampów;
+    zwraca wiersze kandydatów swojego bloku grid_index oraz pełny wynik najlepszego kandydata
+    bloku (odłączony od współdzielonych danych i ponownie dołączony w procesie nadrzędnym) -
+    wybrany kandydat jest zawsze najlepszym w swoim bloku, więc jego wynik jest dostępny bez
+    ponownego runu. Proces nadrzędny składa wiersze po grid_index, wybiera i zapisuje;
+    `grid_results.csv`, `summary.csv` i `selected/` są bajtowo identyczne dla jobs 1, 2, -1
+    (różnią się tylko timestamp i pola jobs w manifeście oraz `performance.jobs` w configu).
+    Postęp (ERR-005): "optimize: completed X/Y evaluated candidates" na stderr, w kolejności
+    ukończenia, bez wpływu na wyniki.
+96. **Wydajność (bez zmiany wyników)**: rekonstrukcja historii sygnału przed startem jest
+    memoizowana (klucz: niezmienna krotka punktów, parametry sygnału, pierwszy tydzień;
+    zwracana głęboka kopia trackera, więc żaden run nie współdzieli stanu mutowalnego); okno SMA
+    trzyma ceny i licznik luk inkrementalnie (`math.fsum` bez zmian). Kandydat S04 ~0.05 s,
+    S05 ~0.15 s. Wszystkie wcześniejsze wyniki (run x8, tax-compare S06, scany S02/S03/S08,
+    delay-scan BTC z podatkami, signals x3) bajtowo identyczne poza `performance.jobs: auto`.
+97. **Wyniki (staged data, mechanika)**: S04 (cagr, none): 676 kombinacji, wszystkie wagowo
+    poprawne i eligible, wybrany grid_index 676 = stocks 0.50 / gold 0.25 / btc 0.25 / rf 0,
+    2018-01-05..2026-07-31 (448 tygodni), final_wealth_pre_tax 3 862 305.31, CAGR 17.04%, max DD
+    34.11%, turnover 3.9628. S05 (after_tax_cagr, individual_pl): 676/676, wybrany ten sam punkt
+    wag, 2018-01-05..2026-06-26 (443 tygodnie, kalendarz ograniczony dywidendami),
+    final_wealth_pre_tax 3 785 934.37, after_tax_terminal_wealth 3 131 083.58, CAGR 16.98%,
+    after-tax CAGR 14.39%, max DD 34.11%, after-tax max DD 37.05%, podatki 504 542.60.
