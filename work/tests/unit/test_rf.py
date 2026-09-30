@@ -24,3 +24,23 @@ def test_reserves_earn_net_rf():
                 getattr(w1.ledger_before_returns, c) * (1 + r - r * 0.19), rel=1e-15)
     comps = {e.component for e in tax.state.tax_events if e.event_type == "rf_interest_tax"}
     assert comps == {"rf_base", "rf_reserve_stocks", "rf_reserve_gold"}
+
+
+def test_foundation_rf_rate():
+    """FND-013: foundation RF income tax uses tax.foundation.rf_interest_rate (default 0: no
+    tax); a positive rate taxes positive RF income per component, negative RF gives no credit."""
+    from fixtures.builders import foundation_hooks
+    hist = [100.0] * 4 + [70.0, 69.0, 68.0, 67.0]
+    inp = engine_inputs({"stocks": hist}, first=6, targets={"stocks": 0.8, "rf": 0.2},
+                        returns={"stocks": [0.0, 0.0]}, rf=[0.001, -0.0002], capital=540_000.0)
+    hooks, fh = foundation_hooks(inp)
+    run_engine(inp, hooks)
+    assert not [e for e in fh.state.tax_events if e.event_type == "rf_interest_tax"]
+    hooks, fh = foundation_hooks(inp, rf_interest_rate=0.1)
+    res = run_engine(inp, hooks)
+    rf = [e for e in fh.state.tax_events if e.event_type == "rf_interest_tax"]
+    assert [(e.week_key, e.component) for e in rf] == [(res.weeks[0].week_key, "rf_base"),
+                                                       (res.weeks[0].week_key, "rf_reserve_stocks")]
+    w = res.weeks[0]
+    assert rf[0].amount == pytest.approx(w.ledger_before_returns.rf_base * 0.001 * 0.1, rel=1e-12)
+    assert res.weeks[1].ledger_end.rf_base == res.weeks[1].ledger_before_returns.rf_base * (1 - 0.0002)

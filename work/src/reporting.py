@@ -140,10 +140,13 @@ def terminal_settlement_doc(t) -> dict:
     liquidation (trades, realizations), the final-year liability and the payments."""
     doc = t.breakout()
     doc["liquidation"] = [{k: fmt(getattr(x, k)) for k in TRADE_FIELDS} for x in t.liquidation_trades]
-    doc["final_year_liability"] = {k: fmt(v) if not isinstance(v, (int, float)) or isinstance(v, bool)
-                                   else v for k, v in vars(t.final_liability).items()
-                                   if k != "buckets_used"}
-    doc["final_year_liability"]["buckets_used"] = [list(b) for b in t.final_liability.buckets_used]
+    plain = lambda v: fmt(v) if not isinstance(v, (int, float)) or isinstance(v, bool) else v  # noqa: E731
+    if hasattr(t, "final_liability"):                              # individual_pl
+        doc["final_year_liability"] = {k: plain(v) for k, v in vars(t.final_liability).items()
+                                       if k != "buckets_used"}
+        doc["final_year_liability"]["buckets_used"] = [list(b) for b in t.final_liability.buckets_used]
+    else:                                                          # foundation
+        doc["final_year_admin_cost"] = {k: plain(v) for k, v in vars(t.final_admin_cost).items()}
     doc["terminal_payments"] = [{k: fmt(getattr(p, k)) for k in PAYMENT_FIELDS} for p in t.terminal_payments]
     doc["reserve_consolidation"] = [{k: fmt(getattr(x, k)) for k in TRANSFER_FIELDS}
                                     for x in t.terminal_transfers]
@@ -166,8 +169,9 @@ def weekly_tax_amounts(week_record, tax_events) -> dict:
                     if e.week_key == week_record.week_key and e.event_type == "dividend_tax")
     rf = math.fsum(e.amount for e in tax_events
                    if e.week_key == week_record.week_key and e.event_type == "rf_interest_tax")
+    costs = math.fsum(p.amount for p in week_record.payments if event_category(p.event_type) == "cost")
     return {"annual_tax_paid": annual, "dividend_tax": div, "rf_interest_tax": rf,
-            "taxes_paid": math.fsum([annual, div, rf])}
+            "taxes_paid": math.fsum([annual, div, rf]), "costs_paid": costs}
 
 
 def record_rows(records, fields) -> list:
@@ -199,7 +203,7 @@ def weekly_portfolio_fields(assets) -> list:
             + ["dividend_return", "gross_dividend", "dividend_reinvested"]
             + ["trades", "traded_value", "transaction_costs", "slippage", "amounts_due",
                "payments", "rebalance", "annual_tax_paid", "dividend_tax", "rf_interest_tax",
-               "taxes_paid"] + [f"state_{a}" for a in assets])
+               "taxes_paid", "costs_paid"] + [f"state_{a}" for a in assets])
 
 
 def weekly_portfolio_rows(result, targets, assets, tax_events=()) -> list:
@@ -264,6 +268,7 @@ SUMMARY_FIELDS = (
      "requested_start", "requested_end", "effective_first_week", "effective_last_week",
      "inception_date", "elapsed_days", "weeks",
      "initial_capital", "nav_start",
+     "investable_initial_capital", "weekly_path_start_nav", "growth_base_nav",
      "final_wealth_pre_tax", "pre_terminal_nav", "after_tax_terminal_wealth",
      "cagr", "after_tax_cagr", "real_cagr", "after_tax_real_cagr",
      "volatility", "after_tax_volatility", "sharpe", "after_tax_sharpe",
@@ -273,7 +278,10 @@ SUMMARY_FIELDS = (
     + [f"after_tax_{p}_{f}" for p in ("best", "worst") for f in YEAR_FIELDS]
     + ["trade_count", "turnover", "turnover_annualized",
        "total_tax_paid", "dividend_tax_paid", "rf_interest_tax_paid", "capital_gains_tax_paid",
-       "solidarity_tax_paid", "foundation_distribution_tax_paid",
+       "solidarity_tax_paid", "internal_trading_tax_paid", "foundation_distribution_tax_paid",
+       "foundation_setup_cost_paid", "foundation_admin_cost_paid", "foundation_admin_cost_weekly",
+       "foundation_admin_cost_terminal", "distributed_amount", "distribution_tax_base_mode",
+       "distribution_tax_base", "pre_tax_final_admin_cost", "pre_tax_terminal_trading_costs",
        "terminal_trade_count", "terminal_traded_value", "terminal_transaction_costs",
        "terminal_slippage", "terminal_liquidation_costs", "terminal_capital_gains_tax",
        "terminal_solidarity_tax", "terminal_foundation_tax", "terminal_tax_total",
@@ -287,7 +295,7 @@ SUMMARY_FIELDS = (
     + [f"risk_{st}_share_{a}" for a in ("stocks", "gold", "btc") for st in ("on", "off")]
     + [f"signal_{a}_{f}" for a in ("stocks", "gold", "btc") for f in SIGNAL_PARAM_FIELDS]
     + ["applied_dividend_tax_rate", "applied_capital_gains_rate", "applied_solidarity_rate",
-       "applied_rf_interest_rate"]
+       "applied_rf_interest_rate", "applied_distribution_rate", "applied_internal_trading_tax_rate"]
     + [k.replace(".", "_") for k in TAX_ASSUMPTION_KEYS])
 
 
@@ -300,8 +308,10 @@ def summary_row(cfg, res) -> dict:
     """Maps already computed results (metrics.RunMetrics, terminal settlement, tax state,
     configuration) to the summary columns; no metric is computed here."""
     m, t = res.metrics, res.terminal
-    tax_final = t.final_tax_state if t else None
+    totals = t.final_tax_state.totals() if t else {}
     params = res.tax_params
+    foundation = hasattr(params, "distribution_rate")
+    shadow_cost = getattr(res.pre_tax, "terminal_cost", None)
     row = {
         "spec_version": cfg.get("app.spec_version"), "run_name": cfg.get("report.run_name"),
         "tax_profile": cfg.get("tax.profile"), "pre_tax_method": res.pre_tax.method,
@@ -310,7 +320,12 @@ def summary_row(cfg, res) -> dict:
         "effective_last_week": res.engine.weeks[-1].week_key,
         "inception_date": res.first_week - dt.timedelta(days=7), "elapsed_days": m.elapsed_days,
         "weeks": m.weeks, "initial_capital": float(cfg.get("portfolio.initial_capital_pln")),
-        "nav_start": m.nav_start,
+        # Q-033: nav_start = growth_base_nav = CAGR/real-CAGR denominator (initial capital before
+        # a foundation setup cost); the weekly path, drawdown and calendar years start at
+        # weekly_path_start_nav = investable_initial_capital
+        "nav_start": m.nav_start, "growth_base_nav": m.growth_base_nav,
+        "investable_initial_capital": res.engine.initial_ledger.nav,
+        "weekly_path_start_nav": m.path_start_nav,
     }
     for k in ("final_wealth_pre_tax", "pre_terminal_nav", "after_tax_terminal_wealth", "cagr",
               "after_tax_cagr", "real_cagr", "after_tax_real_cagr", "volatility",
@@ -322,19 +337,24 @@ def summary_row(cfg, res) -> dict:
     row.update(_year_cells("worst_", m.worst_year))
     row.update(_year_cells("after_tax_best_", m.after_tax_best_year))
     row.update(_year_cells("after_tax_worst_", m.after_tax_worst_year))
+    for k in ("total_tax_paid", "dividend_tax_paid", "rf_interest_tax_paid", "capital_gains_tax_paid",
+              "solidarity_tax_paid", "internal_trading_tax_paid", "foundation_distribution_tax_paid",
+              "foundation_setup_cost_paid", "foundation_admin_cost_paid", "foundation_admin_cost_weekly",
+              "foundation_admin_cost_terminal"):
+        row[k] = totals.get(k, 0.0)
     row.update({
-        "total_tax_paid": tax_final.total_tax_paid() if tax_final else 0.0,
-        "dividend_tax_paid": tax_final.dividend_tax_paid if tax_final else 0.0,
-        "rf_interest_tax_paid": tax_final.rf_tax_paid if tax_final else 0.0,
-        "capital_gains_tax_paid": tax_final.capital_gains_tax_paid if tax_final else 0.0,
-        "solidarity_tax_paid": tax_final.solidarity_tax_paid if tax_final else 0.0,
-        "foundation_distribution_tax_paid": 0.0,
+        "distributed_amount": getattr(t, "distributed_amount", None),
+        "distribution_tax_base_mode": getattr(t, "distribution_tax_base_mode", None),
+        "distribution_tax_base": getattr(t, "distribution_tax_base", None),
+        "pre_tax_final_admin_cost": shadow_cost.admin_cost.amount if shadow_cost else 0.0,
+        "pre_tax_terminal_trading_costs": math.fsum(x.transaction_cost + x.slippage
+                                                    for x in shadow_cost.trades) if shadow_cost else 0.0,
         "terminal_transaction_costs": t.terminal_transaction_costs if t else 0.0,
         "terminal_slippage": t.terminal_slippage if t else 0.0,
         "terminal_liquidation_costs": t.terminal_trading_costs if t else 0.0,
         "terminal_capital_gains_tax": t.terminal_capital_gains_tax if t else 0.0,
         "terminal_solidarity_tax": t.terminal_solidarity_tax if t else 0.0,
-        "terminal_foundation_tax": 0.0,
+        "terminal_foundation_tax": getattr(t, "terminal_foundation_tax", 0.0) if t else 0.0,
         "terminal_tax_total": t.terminal_tax_total if t else 0.0,
         "transaction_cost_bps": float(cfg.get("portfolio.transaction_cost_bps")),
         "slippage_bps": float(cfg.get("portfolio.slippage_bps")),
@@ -365,9 +385,12 @@ def summary_row(cfg, res) -> dict:
         for f in SIGNAL_PARAM_FIELDS:
             row[f"signal_{a}_{f}"] = getattr(p, f)
     row.update({"applied_dividend_tax_rate": params.dividend_rate if params else 0.0,
-                "applied_capital_gains_rate": params.capital_gains_rate if params else 0.0,
-                "applied_solidarity_rate": params.solidarity_rate if params else 0.0,
-                "applied_rf_interest_rate": params.rf_interest_rate if params else 0.0})
+                "applied_capital_gains_rate": getattr(params, "capital_gains_rate", 0.0),
+                "applied_solidarity_rate": getattr(params, "solidarity_rate", 0.0),
+                "applied_rf_interest_rate": params.rf_interest_rate if params else 0.0,
+                "applied_distribution_rate": params.distribution_rate if foundation else 0.0,
+                "applied_internal_trading_tax_rate": params.internal_trading_tax_rate if foundation
+                else 0.0})
     for k in TAX_ASSUMPTION_KEYS:
         row[k.replace(".", "_")] = cfg.get(k)
     unknown = set(row) - set(SUMMARY_FIELDS)

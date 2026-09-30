@@ -116,10 +116,11 @@ def test_run_costs_reduce_nav_monotonically():
     assert costly.weeks[-1].nav_end < free.weeks[-1].nav_end
 
 
-@pytest.mark.parametrize("extra", [{"tax": {"profile": "family_foundation_15"}},
-                                   {"tax": {"profile": "family_foundation_19"}},
-                                   {"tax": {"profile": "family_foundation_19"},
-                                    "portfolio": {"rebalance": "band", "rebalance_band_pp": 1}}])
+@pytest.mark.parametrize("extra", [
+    {"tax": {"profile": "family_foundation_15", "foundation": {"tax_event": "distribution_schedule"}}},
+    {"tax": {"profile": "family_foundation_19", "foundation": {"internal_trading_tax_rate": 0.1}}},
+    {"tax": {"profile": "family_foundation_19", "foundation": {"tax_event": "distribution_schedule"}},
+     "portfolio": {"rebalance": "band", "rebalance_band_pp": 1}}])
 def test_unsupported_modes_are_refused(extra):
     with pytest.raises(NotImplementedCommand):
         run_portfolio(cfg(extra), write=False)
@@ -139,9 +140,10 @@ def test_run_cli_exit_codes(tmp_path):
             "--start", "2018-01-01", "--end", "2026-07-31", "--as-of-date", "2026-09-29"]
     ok = subprocess.run(base + ["--output-dir", str(tmp_path)], capture_output=True, text=True)
     assert ok.returncode == 0, ok.stderr
-    taxed = subprocess.run(base + ["--tax-profile", "family_foundation_15"], capture_output=True,
-                           text=True)
-    assert taxed.returncode == 3 and "foundation profiles are not implemented" in taxed.stderr
+    taxed = subprocess.run(base + ["--tax-profile", "family_foundation_15", "--foundation-tax-event",
+                                   "distribution_schedule"], capture_output=True, text=True)
+    assert taxed.returncode == 3 and "distribution_schedule is not implemented; Q-037 remains open" \
+        in taxed.stderr
     scan = subprocess.run([sys.executable, str(WORK / "backtest.py"), "delay-scan", "--asset", "stocks"],
                           capture_output=True, text=True)
     assert scan.returncode == 3 and "not implemented" in scan.stderr

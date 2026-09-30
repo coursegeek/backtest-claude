@@ -1,18 +1,18 @@
 # IMPLEMENTATION_NOTES — Backtest V2 (clean-room)
 
-Stan: **foundation/core + core portfolio engine + rebalancing/sell_to_pay + podatki i
-terminal settlement individual_pl + pre-tax shadow run + metryki + summary.csv** (sesja 7).
-Zaimplementowane: CLI i API importu, konfiguracja, modele, kalendarz, dostępność informacji,
-loadery z normalizacją kanoniczną, walidacja (semantyka luk Q-012), pipeline sygnałów, ledger,
-koszty transakcyjne, cost basis (lots), centralny tygodniowy engine PORT-011, rebalancing
-`signal-only/weekly/monthly/quarterly/annually(yearly)/band`, sell_to_pay (TAX-006),
-finansowanie należności przy rebalancingu (TAX-007), moduł podatkowy `individual_pl`
-(`src/tax.py`), terminal settlement `individual_pl` (`src/settlement.py`), pre-tax shadow run
-(Q-015), moduł metryk (`src/metrics.py`) i `summary.csv`; komenda `run` dla `tax.profile` none
-i individual_pl.
-Nie ma jeszcze: profili fundacji i ich kosztów, rolling_metrics.csv (MET-022/023, SHOULD),
-scanów, optimize, tax-compare, walk-forward. Te tryby rozwiązują i walidują config, po czym
-kończą się kodem 3 z jawnym komunikatem (bez częściowych wyników).
+Stan: **wszystkie cztery profile podatkowe (none, individual_pl, family_foundation_15/19 z
+tax_event=terminal) w centralnym pipeline + terminal settlement + pre-tax shadow run + metryki +
+summary.csv** (sesja 8). Zaimplementowane: CLI i API importu, konfiguracja, modele, kalendarz,
+dostępność informacji, loadery z normalizacją kanoniczną, walidacja (semantyka luk Q-012),
+pipeline sygnałów, ledger, koszty transakcyjne, cost basis (lots), centralny tygodniowy engine
+PORT-011, rebalancing `signal-only/weekly/monthly/quarterly/annually(yearly)/band`, sell_to_pay
+(TAX-006), finansowanie należności przy rebalancingu (TAX-007), moduł podatkowy `individual_pl`
+(`src/tax.py`), moduł fundacji (`src/foundation.py`), terminal settlement (`src/settlement.py`),
+pre-tax shadow run (Q-015), moduł metryk (`src/metrics.py`) i `summary.csv`.
+Nie ma jeszcze: `tax.foundation.tax_event=distribution_schedule` (Q-037, jawny błąd),
+niezerowego internal trading tax fundacji (Q-047, jawny błąd), rolling_metrics.csv
+(MET-022/023, SHOULD), scanów, optimize, tax-compare, walk-forward. Te tryby kończą się kodem 3
+z jawnym komunikatem (bez częściowych wyników).
 
 Źródło prawdy dla statusów: `compliance_matrix.csv`; pytania: `implementation_questions.csv`.
 
@@ -382,3 +382,62 @@ Warstwy: `models`, `errors`, `config`, `calendar`, `availability`, `data_loader`
     after-tax CAGR 0.1753, maxDD 0.2538, 540 transakcji; individual_pl (zakres do 2026-06-26 przez
     plik dywidend) - CAGR pre-tax 0.1751, after-tax 0.1469, maxDD pre 0.2538 / after 0.2978,
     podatki 516 673 w tym terminalny CG 129 401. Tylko dowód mechaniki (Q-002/Q-004/Q-008).
+
+## Fundacje family_foundation_15/19, tax_event=terminal (sesja 8)
+
+58. **Adjudykacje**: Q-032 (część fundacji), Q-033, Q-034 RESOLVED; Q-037 (distribution_schedule)
+    i Q-047 (internal trading tax > 0) OPEN - oba przypadki kończą run `NotImplementedCommand`
+    z jawnym wskazaniem pytania (nigdy nie są cicho zastępowane terminal / stawką 0).
+59. **`src/foundation.py`**: `FoundationParams` (dividend 0.15, RF 0, internal 0, distribution
+    rate z `tax.foundation_15|19.distribution_rate`, base, tax_event, setup 40 000, admin 40 000,
+    proration; `zero_rates()` zeruje tylko podatki), `FoundationState` (setup/admin paid, admin
+    per rok, zamknięte lata, dividend/RF/internal/distribution tax paid, realizacje per rok -
+    audyt, zdarzenia; bez koszyków strat i CG; `copy()/to_dict()/totals()`) i `FoundationHooks`
+    (kroki 0, 2, 5, 6). Z modułem individual_pl dzieli tylko `TaxEvent` i wspólny prymityw kroku 5
+    `tax.charge_immediate_taxes` (Q-016: składnik cenowy, podatek od dywidendy, lot
+    `dividend_reinvest`; RF per składnik, ujemny RF bez ulgi).
+60. **Setup cost (FND-015/016, Q-033)**: krok 0 (`investable_capital`): investable = initial -
+    setup, błąd gdy setup >= initial; zdarzenie `foundation_setup_cost` (category cost,
+    settlement `initial`, pipeline_step 0, phase `initialization`, week_key = inception); nie
+    jest Trade, kosztem transakcyjnym ani podatkiem. Metryki: `growth_base_nav` (CAGR, real CAGR)
+    = initial capital, `path_start_nav` (ścieżka, drawdown, lata) = investable; summary:
+    `initial_capital`, `investable_initial_capital`, `weekly_path_start_nav`, `growth_base_nav`,
+    a `nav_start` oznacza bazę wzrostu (= growth_base_nav). Dla none/individual_pl wszystkie
+    równe - wartości sprzed refaktoryzacji odtworzone bit w bit (test regresyjny).
+61. **Koszt admin (FND-010..012/014, Q-034)**: dni roku Y w (inception, last_week]; prorated =
+    40 000 * dni / 365|366, full = 40 000 za rok z aktywnym dniem. Otwarty rok startuje od roku
+    inception, więc dni grudnia przed pierwszym tygodniem 1 stycznia są należne w kroku 2 tego
+    tygodnia. Rok Y: AmountsDue `foundation_annual_admin_cost` w kroku 2 pierwszego zachowanego
+    tygodnia Y+1, płatność w kroku 3 istniejącym mechanizmem (TAX-007 przy rebalancingu, TAX-006
+    bez); zdarzenie category cost, settlement annual. Rok finalny w terminal settlement.
+    `weekly_portfolio.costs_paid` pokazuje koszty tygodnia; nie wchodzą do `taxes_paid` ani
+    `total_tax_paid`.
+62. **Terminal settlement fundacji (Q-032)** - `settlement.settle_foundation_terminal` na kopiach
+    snapshotu i stanu: likwidacja 100% stocks/gold/btc (`foundation_distribution_liquidation`,
+    phase terminal, koszty i slippage, cost basis, realizacje - audyt, stawka internal 0) ->
+    konsolidacja rezerw RF (darmowa) -> koszt admin roku finalnego (Payment + TaxEvent category
+    cost, settlement terminal) -> `distributed_amount` = gotówka po kosztach likwidacji i koszcie
+    admin -> podstawa `distributed_amount` albo `gain_only = max(0, distributed - initial_capital
+    sprzed setup cost)` -> podatek `foundation_distribution_tax` (15% / 19%, category tax,
+    settlement terminal) -> `after_tax_terminal_wealth = distributed - tax`. Brak CG i daniny.
+    Brak gotówki na koszt => InsolvencyError. Summary: terminal_foundation_tax = terminal_tax_total
+    = podatek od dystrybucji, terminal CG/danina 0, `distributed_amount`,
+    `distribution_tax_base(_mode)`; `foundation_state.json` (before/after terminal) zamiast
+    `tax_state.json`.
+63. **Shadow pre-tax fundacji (Q-015)**: ten sam `EngineInputs`, `FoundationHooks(zero_rates())`
+    (setup i koszty admin zachowane, podatki 0), potem `settle_foundation_shadow_costs`: koszt
+    admin roku finalnego opłacony waterfallem TAX-006 (rf_base -> rezerwy -> aktywa pro rata z
+    kosztami, phase terminal), bez pełnej likwidacji i bez podatku od dystrybucji;
+    `final_wealth_pre_tax` = wartość po tym koszcie; nie jest częścią ścieżki ani drawdownu.
+64. **Warstwy (FND-007)**: podatek od dywidend (tygodniowy) i od dystrybucji (terminalny) są
+    niezależne; podstawa dystrybucji nie cofa zapłaconego podatku od dywidend.
+65. **15 vs 19**: przy identycznym configu ścieżka tygodniowa, koszty, podatki od dywidend,
+    transakcje i pre_terminal_nav są identyczne; różnią się tylko stawka, podatek od dystrybucji,
+    majątek po podatku i metryki after-tax od niego zależne (test integracyjny).
+66. **Przykład syntetyczny** (1 040 000, setup 40 000, akcje 80% / RF 20%, +50% w tygodniu 11,
+    dywidenda 0.05%/tydz., 10+5 bps, inception 2021-12-31, 2022-01-07..2022-12-30): koszt admin
+    2021 = 0 (0 dni), 2022 terminalny 39 890.41 (364/365), podatek od dywidend 4 341.28,
+    pre_terminal_nav 1 400 625.68, koszty likwidacji 1 793.04, distributed_amount 1 358 942.23;
+    fundacja 15%: podatek 203 841.33 -> 1 155 100.90 (gain_only: podstawa 318 942.23, podatek
+    47 841.33); fundacja 19%: 258 199.02 -> 1 100 743.21 (gain_only 60 599.02); shadow: NAV
+    tygodniowy 1 405 266.86 - koszt admin 39 890.41 z rf_base = final_wealth_pre_tax 1 365 376.44.

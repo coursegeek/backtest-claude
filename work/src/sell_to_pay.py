@@ -25,8 +25,8 @@ class DueCursor:
     """Pays (event_type, amount) items sequentially from funding chunks, one Payment per
     (item, source) piece, in the order the chunks are offered."""
 
-    def __init__(self, pf, week, due: AmountsDue, step: int = 3):
-        self.pf, self.week, self.step = pf, week, step
+    def __init__(self, pf, week, due: AmountsDue, step=3, phase: str = "weekly"):
+        self.pf, self.week, self.step, self.phase = pf, week, step, phase
         self.items = [[t, a] for t, a in due.normalized_items()]
 
     @property
@@ -37,7 +37,8 @@ class DueCursor:
         paid_total = 0.0
         while amount > 0 and self.items:
             event_type, left = self.items[0]
-            p = self.pf.pay(self.week, min(left, amount), event_type, source, context, self.step)
+            p = self.pf.pay(self.week, min(left, amount), event_type, source, context, self.step,
+                            self.phase)
             paid = p.amount if p else 0.0
             if paid <= 0:
                 break
@@ -49,16 +50,17 @@ class DueCursor:
         return paid_total
 
 
-def sell_to_pay(pf, ctx: WeekContext, due: AmountsDue) -> None:
+def sell_to_pay(pf, ctx: WeekContext, due: AmountsDue, step=3, phase: str = "weekly") -> None:
     """TAX-006 without a strategic trigger, in this exact order:
       (A) rf_base, no cost;
       (B) RF reserves pro rata to their current values, no cost;
       (C) stocks/gold/btc pro rata to current market values, gross = N/(1-c) (Q-046), each
           sale with costs, cost-basis update and realization, reason sell_to_pay;
       (D) insolvency error when the net liquidation value cannot cover the amount.
-    Signal states are never changed."""
+    Signal states are never changed. ``step``/``phase`` mark the trades and payments (weekly
+    step 3 by default; the pre-tax foundation cost settlement uses phase 'terminal')."""
     week = ctx.week
-    cursor = DueCursor(pf, week, due)
+    cursor = DueCursor(pf, week, due, step, phase)
     if not cursor.items:
         return
     led = pf.ledger
@@ -87,6 +89,6 @@ def sell_to_pay(pf, ctx: WeekContext, due: AmountsDue) -> None:
         for a in assets:
             if a in values:
                 g = values[a] if gross >= v_tot else gross * values[a] / v_tot
-                pf.sell(week, a, g, TradeReason.SELL_TO_PAY, RF_BASE, step=3)
+                pf.sell(week, a, g, TradeReason.SELL_TO_PAY, RF_BASE, step=step, phase=phase)
         raised = pf.ledger.rf_base - cash_before
         cursor.pay(RF_BASE, min(left, raised), "sell_to_pay:C_risky_assets_pro_rata")

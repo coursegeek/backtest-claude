@@ -4,8 +4,11 @@ Q-040, Q-045).
 Pure functions on weekly paths; no I/O, no engine state. Conventions:
   * NAV path for drawdowns = [NAV_start, nav_end week 1, ..., nav_end last week]; the running
     maximum includes NAV_start; terminal settlement is never part of any path (MET-026).
-  * CAGR = (NAV_end / NAV_start) ** (365.2425 / elapsed_days) - 1 with
-    elapsed_days = last retained week - inception date (Q-014).
+  * CAGR = (wealth / growth_base_nav) ** (365.2425 / elapsed_days) - 1 with
+    elapsed_days = last retained week - inception date (Q-014). Two bases (Q-033):
+    growth_base_nav (CAGR, real CAGR) = initial_capital_pln before any foundation setup cost;
+    path_start_nav (weekly path, drawdown, calendar years) = NAV of the initial allocation
+    (investable capital). They are equal for none and individual_pl.
   * volatility = sample std (ddof=1) of weekly returns * sqrt(52); Sharpe on weekly excess
     returns over RF, mean / sample std * sqrt(52); Sortino with the weekly MAR
     (1 + MAR_annual) ** (1/52) - 1 and the downside deviation over all weeks.
@@ -256,7 +259,9 @@ class PathSeries:
 
 @dataclass(frozen=True)
 class RunMetrics:
-    nav_start: float
+    nav_start: float                # = growth_base_nav (CAGR denominator), kept for compatibility
+    growth_base_nav: float          # initial capital before the foundation setup cost
+    path_start_nav: float           # start of the weekly NAV path (investable capital)
     elapsed_days: int
     weeks: int
     final_wealth_pre_tax: float
@@ -298,31 +303,34 @@ def compute_run_metrics(*, pre: PathSeries, after: PathSeries, elapsed_days: int
                         rf_after_tax_rate: float, pre_terminal_nav: float,
                         after_tax_terminal_wealth: float, trades, terminal_trades=(),
                         week_states=(), assets=(), mar_annual: float = 0.0,
-                        cpi: Optional[CpiWindow] = None) -> RunMetrics:
+                        cpi: Optional[CpiWindow] = None, growth_base_nav: Optional[float] = None,
+                        final_wealth_pre_tax: Optional[float] = None) -> RunMetrics:
     """Pre-tax metrics on the shadow path (Q-015), after-tax risk metrics on the actual weekly
     path, after-tax CAGR on after-tax terminal wealth; trading metrics on the actual weekly
     trades (MET-001..021, MET-025, MET-026)."""
     if pre.nav_start != after.nav_start:
         raise ValueError("pre-tax and actual runs must start from the same NAV")
-    nav_start = pre.nav_start
+    path_start = pre.nav_start
+    growth_base = path_start if growth_base_nav is None else growth_base_nav
     rf = list(rf_returns)
-    final_pre = pre.nav_ends[-1]
-    g = cagr(final_pre, nav_start, elapsed_days)
-    ga = cagr(after_tax_terminal_wealth, nav_start, elapsed_days)
-    dd = max_drawdown(nav_path(nav_start, pre.nav_ends))
-    dda = max_drawdown(nav_path(nav_start, after.nav_ends))
-    years = calendar_year_returns(nav_start, pre.week_keys, pre.nav_ends)
-    years_a = calendar_year_returns(nav_start, after.week_keys, after.nav_ends)
+    final_pre = pre.nav_ends[-1] if final_wealth_pre_tax is None else final_wealth_pre_tax
+    g = cagr(final_pre, growth_base, elapsed_days)
+    ga = cagr(after_tax_terminal_wealth, growth_base, elapsed_days)
+    dd = max_drawdown(nav_path(path_start, pre.nav_ends))
+    dda = max_drawdown(nav_path(path_start, after.nav_ends))
+    years = calendar_year_returns(path_start, pre.week_keys, pre.nav_ends)
+    years_a = calendar_year_returns(path_start, after.week_keys, after.nav_ends)
     best, worst = best_and_worst_year(years)
     best_a, worst_a = best_and_worst_year(years_a)
     to = turnover(trades, after.nav_ends)
     real = real_after = None
     if cpi is not None and cpi.cpi_start and cpi.cpi_end:
-        real = real_cagr(final_pre, nav_start, cpi.cpi_start, cpi.cpi_end, elapsed_days)
-        real_after = real_cagr(after_tax_terminal_wealth, nav_start, cpi.cpi_start, cpi.cpi_end,
+        real = real_cagr(final_pre, growth_base, cpi.cpi_start, cpi.cpi_end, elapsed_days)
+        real_after = real_cagr(after_tax_terminal_wealth, growth_base, cpi.cpi_start, cpi.cpi_end,
                                elapsed_days)
     return RunMetrics(
-        nav_start=nav_start, elapsed_days=elapsed_days, weeks=len(after.week_keys),
+        nav_start=growth_base, growth_base_nav=growth_base, path_start_nav=path_start,
+        elapsed_days=elapsed_days, weeks=len(after.week_keys),
         final_wealth_pre_tax=final_pre, pre_terminal_nav=pre_terminal_nav,
         after_tax_terminal_wealth=after_tax_terminal_wealth,
         cagr=g, after_tax_cagr=ga, real_cagr=real, after_tax_real_cagr=real_after,

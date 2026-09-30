@@ -58,6 +58,17 @@ def test_tax_module_boundaries():
 def test_settlement_is_a_separate_layer():
     """PORT-014, IND-017: terminal settlement is a layer after the engine; the weekly engine,
     the tax hooks and reporting of the weekly path do not depend on it."""
-    assert imports("settlement") <= {"engine", "errors", "ledger", "models", "rf", "tax"}
-    for mod in ("engine", "tax", "rebalancing", "sell_to_pay", "ledger"):
+    assert imports("settlement") <= {"engine", "errors", "ledger", "models", "rf", "tax",
+                                     "foundation", "sell_to_pay"}
+    for mod in ("engine", "tax", "foundation", "rebalancing", "sell_to_pay", "ledger"):
         assert "settlement" not in imports(mod), mod
+
+
+def test_foundation_module_boundaries():
+    """TAX-001: foundation rules live in src/foundation.py; it shares only the step-5 primitive
+    and the TaxEvent record with the individual module (no loss buckets / CG)."""
+    assert imports("foundation") <= {"engine", "errors", "tax"}
+    text = (SRC / "foundation.py").read_text(encoding="utf-8")
+    assert "LossBucket" not in text and "close_tax_year" not in text
+    for mod in ("engine", "tax", "rebalancing", "sell_to_pay", "ledger"):
+        assert "foundation" not in imports(mod), mod

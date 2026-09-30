@@ -177,6 +177,16 @@ class TaxState:
         return math.fsum([self.dividend_tax_paid, self.rf_tax_paid, self.capital_gains_tax_paid,
                           self.solidarity_tax_paid])
 
+    def totals(self) -> dict:
+        """Summary tax/cost totals (same keys as FoundationState.totals)."""
+        return {"total_tax_paid": self.total_tax_paid(), "dividend_tax_paid": self.dividend_tax_paid,
+                "rf_interest_tax_paid": self.rf_tax_paid,
+                "capital_gains_tax_paid": self.capital_gains_tax_paid,
+                "solidarity_tax_paid": self.solidarity_tax_paid, "internal_trading_tax_paid": 0.0,
+                "foundation_distribution_tax_paid": 0.0, "foundation_setup_cost_paid": 0.0,
+                "foundation_admin_cost_paid": 0.0, "foundation_admin_cost_weekly": 0.0,
+                "foundation_admin_cost_terminal": 0.0}
+
     def to_dict(self) -> dict:
         def j(v):
             if isinstance(v, dt.date):
@@ -276,6 +286,44 @@ def close_tax_year(state: TaxState, params: TaxParams, year: int, week: dt.date,
     return liab
 
 
+# ============================================================================ step 5 (shared)
+def charge_immediate_taxes(portfolio, week, ledger_before_returns, market, dividend_rate: float,
+                           rf_rate: float) -> list:
+    """Immediate taxes of step 5 shared by every taxed profile (DIV-005..007, Q-016, IND-014/015,
+    FND-001, FND-013, PORT-013): dividend tax on value_before_returns * dividend_return, withheld
+    from the asset with the net dividend reinvested as a dividend_reinvest lot; RF income tax
+    max(0, value_before_returns * R_rf) * rate withheld from each RF component (negative RF: no
+    tax, no credit). Returns the TaxEvents in a fixed order (dividends by canonical asset, then
+    rf_base and the reserves); the caller books them."""
+    events, year = [], tax_year(week)
+    for a in canonical_assets(market.dividend_yield):
+        d = market.dividend_yield[a]
+        v = ledger_before_returns.asset(a)
+        if not d or v <= 0:
+            continue
+        gross = v * d
+        rec = portfolio.settle_dividend(week, a, v, d, gross * dividend_rate)
+        if rec.dividend_tax > 0:
+            events.append(TaxEvent(
+                week, "dividend_tax", "tax", "weekly", year, a, a, gross, gross,
+                dividend_rate, rec.dividend_tax, 5,
+                source_status=market.dividend_status.get(a, ""),
+                notes=f"gross_dividend={gross!r} (value_before_returns {v!r} x dividend_return "
+                      f"{d!r}); net_reinvested={rec.net_reinvested!r} lot {rec.lot_id}"))
+    r = market.rf_return
+    for c in RF_COMPONENTS:
+        v = getattr(ledger_before_returns, c)
+        income = max(0.0, v * r)
+        tax = income * rf_rate
+        if tax <= 0:
+            continue
+        withheld = portfolio.withhold(week, c, tax)
+        events.append(TaxEvent(
+            week, "rf_interest_tax", "tax", "weekly", year, "rf", c, v * r, income,
+            rf_rate, withheld, 5, notes=f"rf_income=max(0,{v!r}*{r!r}); withheld from {c}"))
+    return events
+
+
 # ============================================================================ hooks
 class IndividualTaxHooks(PipelineHooks):
     """individual_pl taxes as a pipeline extension (steps 2, 5, 6). Combine with the
@@ -337,36 +385,14 @@ class IndividualTaxHooks(PipelineHooks):
     # ---------------------------------------------------------------- step 5
     def immediate_taxes(self, ctx: WeekContext, portfolio, ledger_before_returns, market) -> None:
         self._ingest(portfolio)
-        p, st, week, year = self.params, self.state, ctx.week, tax_year(ctx.week)
-        for a in canonical_assets(market.dividend_yield):          # DIV-005..007, Q-016
-            d = market.dividend_yield[a]
-            v = ledger_before_returns.asset(a)
-            if not d or v <= 0:
-                continue
-            gross = v * d
-            tax = gross * p.dividend_rate
-            rec = portfolio.settle_dividend(week, a, v, d, tax)
-            if rec.dividend_tax > 0:
-                st.dividend_tax_paid += rec.dividend_tax
-                st.tax_events.append(TaxEvent(
-                    week, "dividend_tax", "tax", "weekly", year, a, a, gross, gross,
-                    p.dividend_rate, rec.dividend_tax, 5,
-                    source_status=market.dividend_status.get(a, ""),
-                    notes=f"gross_dividend={gross!r} (value_before_returns {v!r} x dividend_return "
-                          f"{d!r}); net_reinvested={rec.net_reinvested!r} lot {rec.lot_id}"))
-        r = market.rf_return                                       # IND-014/015, PORT-013
-        for c in RF_COMPONENTS:
-            v = getattr(ledger_before_returns, c)
-            income = max(0.0, v * r)
-            tax = income * p.rf_interest_rate
-            if tax <= 0:
-                continue                           # negative RF: no tax, no credit
-            withheld = portfolio.withhold(week, c, tax)
-            st.rf_tax_paid += withheld
-            st.tax_events.append(TaxEvent(
-                week, "rf_interest_tax", "tax", "weekly", year, "rf", c, v * r, income,
-                p.rf_interest_rate, withheld, 5,
-                notes=f"rf_income=max(0,{v!r}*{r!r}); withheld from {c}"))
+        st = self.state
+        for e in charge_immediate_taxes(portfolio, ctx.week, ledger_before_returns, market,
+                                        self.params.dividend_rate, self.params.rf_interest_rate):
+            if e.event_type == "dividend_tax":
+                st.dividend_tax_paid += e.amount
+            else:
+                st.rf_tax_paid += e.amount
+            st.tax_events.append(e)
 
     # ---------------------------------------------------------------- step 6
     def end_of_week(self, ctx: WeekContext, portfolio) -> None:

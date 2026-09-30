@@ -1,4 +1,5 @@
-"""TEST-019 and TEST-047 (signal, rebalance, sell_to_pay and terminal liquidation trades)."""
+"""TEST-019 and TEST-047 (signal, rebalance, sell_to_pay, terminal liquidation and foundation
+distribution liquidation trades)."""
 from fixtures.builders import engine_inputs
 from src.costs import CostModel
 from src.engine import run_engine
@@ -31,6 +32,7 @@ def test_all_trade_cost_scope():
     terminal liquidation - pays cost = gross_traded_value * bps / 10000 for transaction costs
     and for slippage alike; RF transfers, payments and dividend reinvestments are not trades
     and pay nothing. No transaction type is exempt."""
+    import datetime as dt
     import math
     import pytest
     from src.engine import AmountsDue, ComposedHooks, PipelineHooks
@@ -77,6 +79,19 @@ def test_all_trade_cost_scope():
         assert term.terminal_transaction_costs == pytest.approx(
             math.fsum(t.gross_traded_value for t in term.liquidation_trades) * tc_bps / 10000, rel=1e-12)
         assert all(x.amount > 0 for x in term.terminal_transfers)     # free: NAV unchanged
+        # foundation terminal settlement (REB-011: foundation_distribution_liquidation)
+        from fixtures.builders import foundation_hooks
+        from src.settlement import settle_foundation_terminal
+        fhooks, fh = foundation_hooks(inp, mode=mode, band_pp=band)
+        fres = run_engine(inp, fhooks)
+        fterm = settle_foundation_terminal(fres.final_snapshot, fh.params, fh.state, 1_000_000.0,
+                                           inp.weeks[0] - dt.timedelta(days=7))
+        for t in fres.trades + fterm.liquidation_trades:
+            assert t.transaction_cost == pytest.approx(t.gross_traded_value * tc_bps / 10000, rel=1e-12)
+            assert t.slippage == pytest.approx(t.gross_traded_value * slip_bps / 10000, rel=1e-12)
+            seen.add(t.reason)
+        assert fterm.pre_terminal_nav - fterm.nav_after_liquidation == pytest.approx(
+            fterm.terminal_trading_costs, rel=1e-9)
     assert {TradeReason.SIGNAL_EXIT, TradeReason.SIGNAL_REENTRY, TradeReason.CALENDAR_REBALANCE,
-            TradeReason.BAND_REBALANCE, TradeReason.SELL_TO_PAY,
-            TradeReason.TERMINAL_LIQUIDATION} <= seen
+            TradeReason.BAND_REBALANCE, TradeReason.SELL_TO_PAY, TradeReason.TERMINAL_LIQUIDATION,
+            TradeReason.FOUNDATION_DISTRIBUTION_LIQUIDATION} <= seen

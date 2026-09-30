@@ -35,7 +35,7 @@ Core engine nie został napisany; powstały wyłącznie narzędzia audytowe, rap
 | MINOR | 23 (+ Q-050, Q-051, Q-052) |
 | MUST zmapowane bez blokera (`MAPPED`) | 340 w audycie → 347 po adjudykacji |
 | MUST zablokowane decyzją (`BLOCKED`) | 12 w audycie → 5 po adjudykacji (tylko DATA BLOCKER) |
-| MUST `PASS` | 0 w audycie; 139 po sesji 2; 165 po sesji 3; 177 po sesji 4; 217 po sesji 5; 225 po sesji 6; 262 po sesji 7 (sekcja 13) |
+| MUST `PASS` | 0 w audycie; 139 po sesji 2; 165 po sesji 3; 177 po sesji 4; 217 po sesji 5; 225 po sesji 6; 262 po sesji 7; 287 po sesji 8 (sekcja 13) |
 | SHOULD proponowane do odroczenia | 1 (ERR-007 cache) |
 | Kontrole danych | 58: 27 PASS, 12 FAIL, 14 WARN, 5 INFO |
 | Scenariusze AB + przykłady CLI | 20: 10 wykonalnych, 10 wymaga decyzji |
@@ -224,7 +224,9 @@ jawne ostrzeżenia lub czytelne błędy zamiast cichych założeń.
 | Q-030 limit offsetu strat (sesja 6) | RESOLVED | `eligible_offset = min(Σ pozostałych sald niewygasłych bucketów * loss_offset_fraction, dodatni zysk roku)`; bucket z Y używalny w Y+1..Y+N, oldest-first. |
 | Q-051 external base daniny (sesja 6) | RESOLVED | Dosłowny model IND-002/004/005: gdy sama external base przekracza próg, danina od nadwyżki także przy zerowym zysku (założenie modelu). |
 | Q-052 polityki estimate (sesja 6) | RESOLVED | allow_with_warning (estimate + ostrzeżenie + status), actual_only (estimate usuwane ze źródła, decyduje alignment/missing policy), error_on_estimate (błąd). |
-| Q-032 terminal settlement (sesje 6-7, częściowo) | OPEN | individual_pl: likwidacja 100% ryzykownych aktywów z kosztami → realizacje do roku finalnego → netting + carry-forward → CG → danina → after_tax_terminal_wealth; nie jest tygodniem backtestu. none (sesja 7): brak settlementu, pola terminalne 0, after_tax_terminal_wealth = pre_terminal_nav. Otwarte tylko dla fundacji. |
+| Q-032 terminal settlement (sesje 6-8) | RESOLVED | individual_pl: likwidacja 100% ryzykownych aktywów z kosztami → realizacje do roku finalnego → netting + carry-forward → CG → danina → after_tax_terminal_wealth; nie jest tygodniem backtestu. none (sesja 7): brak settlementu, pola terminalne 0, after_tax_terminal_wealth = pre_terminal_nav. Fundacje (sesja 8, tax_event=terminal): likwidacja → konsolidacja rezerw → koszt admin roku finalnego → distributed_amount → podatek od dystrybucji (distributed_amount albo gain_only od initial capital) → after_tax_terminal_wealth. distribution_schedule: osobne Q-037. |
+| Q-033 setup cost a CAGR (sesja 8) | RESOLVED | CAGR/real CAGR od initial_capital_pln (przed setup cost); ścieżka tygodniowa, drawdown i lata od investable capital; setup nie jest drawdownem. |
+| Q-034 proration kosztu admin (sesja 8) | RESOLVED | Dni roku w (inception, last_week]; prorated = koszt * dni / 365|366; full = pełny koszt za rok z aktywnym dniem; dni grudnia przed pierwszym tygodniem stycznia należne w pierwszym tygodniu. |
 | Q-040 konwencje metryk (sesja 7) | RESOLVED | Drawdown od NAV_start bez terminalu; lata wg Friday key z flagą partial; trade_count i turnover tylko transakcje weekly (terminal osobno); udziały RISK_ON/OFF per aktywo; Sharpe after-tax z RF netto. |
 | Q-045 CPI / real CAGR (sesja 7) | RESOLVED | CPI_start = miesiąc inception, CPI_end = miesiąc ostatniego zachowanego tygodnia (previous_available z flagą); real_cagr pre-tax wymagany, after_tax_real_cagr dodatkowo; dokładne ostrzeżenie US CPI. |
 | Q-046 sell_to_pay (sesja 4) | RESOLVED | Wartości po kroku 1; A rf_base → B rezerwy pro rata → C stocks/gold/btc pro rata do wartości rynkowych z gross-up `N/(1-c)` ograniczonym do pozycji; każda sprzedaż aktualizuje cost basis i realizację; stan sygnału bez zmian; insolvency, gdy wartość likwidacyjna netto < należność; wynik niezależny od kolejności kluczy. |
@@ -272,8 +274,17 @@ Wiersze MUST nadal `BLOCKED` (dane niekanoniczne): SEM-001, SEM-003, SCHEMA-005,
   `summary.csv` (jeden szeroki wiersz, stabilna kolejność kolumn, bez timestampu). Q-040 i Q-045
   RESOLVED; Q-032 rozstrzygnięty dla none (otwarty tylko dla fundacji).
 
-Stan macierzy: MUST — 262 `PASS`, 18 `IN_PROGRESS`, 67 `MAPPED`, 5 `BLOCKED` (DATA BLOCKER),
-0 `FAIL`; SHOULD — 13 `PASS`. Testy: `python -m pytest work` (wszystkie przechodzą). Żaden wiersz
+* Sesja 8: profile `family_foundation_15/19` (tax_event=terminal) w centralnym pipeline
+  (`src/foundation.py`): setup cost w kroku 0, roczny koszt admin z proration Q-034 w kroku 2/3,
+  podatek od dywidend 15% i RF (stawka konfigurowalna) w kroku 5, terminal settlement fundacji
+  (likwidacja `foundation_distribution_liquidation`, koszt admin roku finalnego, podatek od
+  dystrybucji 15/19% od distributed_amount lub gain_only), shadow pre-tax z kosztami (w tym
+  koszt admin roku finalnego po ścieżce tygodniowej); metryki z osobną bazą wzrostu
+  (initial capital) i startem ścieżki (investable). Q-032, Q-033, Q-034 RESOLVED; Q-037
+  (distribution_schedule) i Q-047 (internal trading tax > 0) otwarte - jawne błędy.
+
+Stan macierzy: MUST — 287 `PASS`, 14 `IN_PROGRESS`, 46 `MAPPED`, 5 `BLOCKED` (DATA BLOCKER),
+0 `FAIL`; SHOULD — 14 `PASS`. Testy: `python -m pytest work` (wszystkie przechodzą). Żaden wiersz
 zablokowany przez Q-002/Q-004/Q-008 nie został oznaczony `PASS` na podstawie staged plików;
 dowody dla LBMA, segmentów SEM-001 i kanonicznego SCHEMA-005 pochodzą z syntetycznych fixture'ów.
 
@@ -285,9 +296,9 @@ questions_total=52
 blockers=6
 major=20
 minor=26
-must_mapped=67
+must_mapped=46
 must_blocked=5
-must_pass=262
+must_pass=287
 should_proposed_deferral=1
 input_checks=58
 checks_fail=12
@@ -299,9 +310,9 @@ scenarios_feasible=10
 scenarios_needs_decision=10
 blocker_ids=Q-002,Q-004,Q-005,Q-008,Q-012,Q-020
 data_blocker_ids=Q-002,Q-004,Q-008
-resolved_ids=Q-005,Q-006,Q-012,Q-014,Q-015,Q-016,Q-017,Q-018,Q-019,Q-020,Q-029,Q-030,Q-035,Q-039,Q-040,Q-045,Q-046,Q-049,Q-050,Q-051,Q-052
-open_questions=28
+resolved_ids=Q-005,Q-006,Q-012,Q-014,Q-015,Q-016,Q-017,Q-018,Q-019,Q-020,Q-029,Q-030,Q-032,Q-033,Q-034,Q-035,Q-039,Q-040,Q-045,Q-046,Q-049,Q-050,Q-051,Q-052
+open_questions=25
 must_fail=0
-must_in_progress=18
-should_pass=13
+must_in_progress=14
+should_pass=14
 -->

@@ -58,8 +58,9 @@ def test_profiles():
             p.rf_interest_rate) == (0.19, 0.19, 0.04, 1_000_000.0, 0.0, 5, 1.0, 0.19)
     assert tax_hooks_from_config(ResolvedConfig("run")) is None
     assert isinstance(tax_hooks_from_config(cfg()), IndividualTaxHooks)
-    with pytest.raises(NotImplementedCommand):
-        run_portfolio(cfg({"tax": {"profile": "family_foundation_19"}}), write=False)
+    with pytest.raises(NotImplementedCommand, match="Q-037"):
+        run_portfolio(cfg({"tax": {"profile": "family_foundation_19",
+                                   "foundation": {"tax_event": "distribution_schedule"}}}), write=False)
     with pytest.raises(ConfigError):
         TaxParams(capital_gains_rate=1.5)
     with pytest.raises(ConfigError):
@@ -469,3 +470,17 @@ def test_terminal_insolvency_and_profile_scope():
     assert run_portfolio(cfg({"tax": {"profile": "none"}}), write=False).terminal is None
     r = run_portfolio(cfg(), write=False)
     assert r.terminal is not None and r.terminal.pre_terminal_nav == r.engine.weeks[-1].nav_end
+
+
+def test_foundation_tax_event_modes():
+    """FND-005: tax_event=terminal (default) runs; distribution_schedule is refused with the
+    exact Q-037 message instead of silently using terminal."""
+    from src.foundation import FoundationParams
+    r = run_portfolio(cfg({"tax": {"profile": "family_foundation_15"}}), write=False)
+    assert r.tax_params.tax_event == "terminal" and r.terminal.distribution_tax > 0
+    with pytest.raises(NotImplementedCommand,
+                       match="distribution_schedule is not implemented; Q-037 remains open"):
+        FoundationParams("family_foundation_15", tax_event="distribution_schedule")
+    with pytest.raises(NotImplementedCommand, match="Q-037"):
+        run_portfolio(cfg({"tax": {"profile": "family_foundation_19",
+                                   "foundation": {"tax_event": "distribution_schedule"}}}), write=False)

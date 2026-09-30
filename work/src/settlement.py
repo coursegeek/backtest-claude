@@ -32,7 +32,11 @@ from .errors import InsolvencyError
 from .ledger import Ledger
 from .models import RISKY_ASSETS, TradeReason, canonical_assets
 from .rf import RF_BASE, reserve_name
-from .tax import AnnualLiability, TaxParams, TaxState, close_tax_year, tax_year
+from .engine import AmountsDue, WeekContext
+from .foundation import (ADMIN_COST, DISTRIBUTION_TAX, AdminCost, FoundationParams,
+                         FoundationState, admin_cost_event, admin_cost_for_year)
+from .sell_to_pay import sell_to_pay
+from .tax import AnnualLiability, TaxEvent, TaxParams, TaxState, close_tax_year, tax_year
 
 PHASE = "terminal"
 TERMINAL_TAX_TYPES = ("capital_gains_tax", "solidarity_tax")
@@ -90,15 +94,15 @@ class TerminalSettlementResult:
         }
 
 
-def terminal_liquidation(snapshot: PortfolioSnapshot) -> WorkingPortfolio:
-    """IND-016, REB-011: sell 100% of stocks, gold and BTC of a copy of the final portfolio in
-    canonical order, with transaction costs and slippage; net proceeds to rf_base."""
+def terminal_liquidation(snapshot: PortfolioSnapshot,
+                         reason: TradeReason = TradeReason.TERMINAL_LIQUIDATION) -> WorkingPortfolio:
+    """IND-016, FND-005, REB-011: sell 100% of stocks, gold and BTC of a copy of the final
+    portfolio in canonical order, with transaction costs and slippage; net proceeds to rf_base."""
     pf = WorkingPortfolio.from_snapshot(snapshot)
     for a in canonical_assets(RISKY_ASSETS):
         v = pf.ledger.asset(a)
         if v > 0:
-            pf.sell(snapshot.week_key, a, v, TradeReason.TERMINAL_LIQUIDATION, RF_BASE,
-                    step=None, phase=PHASE)
+            pf.sell(snapshot.week_key, a, v, reason, RF_BASE, step=None, phase=PHASE)
     if any(pf.ledger.asset(a) != 0.0 for a in RISKY_ASSETS):
         raise AssertionError("terminal liquidation left a risky position")
     pf.check_holdings("terminal liquidation: ")
@@ -158,3 +162,177 @@ def settle_terminal(snapshot: PortfolioSnapshot, params: TaxParams,
         terminal_tax_events=tuple(final.tax_events[n_events:]),
         after_tax_terminal_wealth=pf.ledger.nav, final_cash_ledger=pf.ledger,
         final_liability=liab, tax_state_before_terminal=before, final_tax_state=final)
+
+
+# ============================================================================ foundation
+def _consolidate_reserves(pf, week) -> None:
+    for a in canonical_assets(RISKY_ASSETS):               # reserves are cash-like: free move
+        pf.transfer(week, reserve_name(a), RF_BASE, pf.ledger.reserve(a),
+                    "terminal_consolidation", step=None, phase=PHASE)
+
+
+def _final_admin_cost(params: FoundationParams, state: FoundationState, inception, week):
+    year = tax_year(week)
+    if state.open_year is None:
+        state.open_year = inception.year
+    if state.open_year != year:
+        raise ValueError(f"open foundation year {state.open_year} != year {year} of the last week")
+    amount, active, days, factor = admin_cost_for_year(params, year, inception, week)
+    return AdminCost(year, active, days, factor, amount, week, "terminal")
+
+
+@dataclass(frozen=True)
+class FoundationTerminalResult:
+    """Q-032 (foundation, tax_event=terminal): liquidation -> reserve consolidation ->
+    final-year admin cost -> distributed_amount -> distribution tax -> after-tax wealth."""
+    last_week: dt.date
+    final_tax_year: int
+    pre_terminal_ledger: Ledger
+    pre_terminal_nav: float
+    liquidation_trades: tuple
+    terminal_realizations: tuple
+    terminal_transaction_costs: float
+    terminal_slippage: float
+    terminal_trading_costs: float
+    nav_after_liquidation: float
+    final_admin_cost: AdminCost
+    distributed_amount: float               # cash after liquidation costs and final admin cost
+    distribution_tax_base_mode: str
+    distribution_tax_base: float
+    distribution_rate: float
+    distribution_tax: float
+    terminal_capital_gains_tax: float       # always 0 (no CG for foundations)
+    terminal_solidarity_tax: float          # always 0
+    terminal_foundation_tax: float          # = distribution tax
+    terminal_tax_total: float
+    terminal_transfers: tuple
+    terminal_payments: tuple
+    terminal_tax_events: tuple
+    after_tax_terminal_wealth: float
+    final_cash_ledger: Ledger
+    tax_state_before_terminal: FoundationState
+    final_tax_state: FoundationState
+
+    def breakout(self) -> dict:
+        return {
+            "last_week": self.last_week.isoformat(), "final_tax_year": self.final_tax_year,
+            "pre_terminal_nav": self.pre_terminal_nav,
+            "terminal_transaction_costs": self.terminal_transaction_costs,
+            "terminal_slippage": self.terminal_slippage,
+            "terminal_liquidation_costs": self.terminal_trading_costs,
+            "nav_after_liquidation": self.nav_after_liquidation,
+            "final_admin_cost": self.final_admin_cost.amount,
+            "final_admin_active_days": self.final_admin_cost.active_days,
+            "distributed_amount": self.distributed_amount,
+            "distribution_tax_base_mode": self.distribution_tax_base_mode,
+            "distribution_tax_base": self.distribution_tax_base,
+            "distribution_rate": self.distribution_rate,
+            "terminal_capital_gains_tax": 0.0, "terminal_solidarity_tax": 0.0,
+            "terminal_foundation_tax": self.terminal_foundation_tax,
+            "terminal_tax_total": self.terminal_tax_total,
+            "after_tax_terminal_wealth": self.after_tax_terminal_wealth,
+            "final_cash_ledger": self.final_cash_ledger.components(),
+            "liquidation_trades": len(self.liquidation_trades),
+        }
+
+
+def distribution_base(mode: str, distributed_amount: float, initial_capital: float) -> float:
+    """FND-006, Q-032: distributed_amount, or gain_only = max(0, distributed - initial capital
+    before the setup cost)."""
+    if mode == "gain_only":
+        return max(0.0, distributed_amount - initial_capital)
+    return distributed_amount
+
+
+def settle_foundation_terminal(snapshot: PortfolioSnapshot, params: FoundationParams,
+                               state: FoundationState, initial_capital: float,
+                               inception: dt.date) -> FoundationTerminalResult:
+    """FND-003..007, FND-011, FND-012, Q-032: terminal settlement of a foundation on copies of
+    the final snapshot and state; never a weekly record."""
+    week, year = snapshot.week_key, tax_year(snapshot.week_key)
+    before = state.copy()
+    final = state.copy()
+    pf = terminal_liquidation(snapshot, TradeReason.FOUNDATION_DISTRIBUTION_LIQUIDATION)
+    after_liq = pf.ledger
+    trades, reals = tuple(pf.trades), tuple(pf.realizations)
+    for r in reals:                         # audited; internal trading tax rate 0 (FND-002)
+        final.realizations.setdefault(tax_year(r.week_key), []).append(
+            (r.asset, r.realized_gain, r.week_key))
+    n_events = len(final.tax_events)
+    _consolidate_reserves(pf, week)
+    cost = _final_admin_cost(params, final, inception, week)          # FND-011: no fake week
+    if cost.amount > pf.ledger.rf_base * (1 + 1e-12) + 1e-12:
+        raise InsolvencyError(week, cost.amount, pf.ledger.rf_base)
+    final.tax_events.append(admin_cost_event(params, cost, "terminal"))
+    if cost.amount > 0:
+        pf.pay(week, cost.amount, ADMIN_COST, RF_BASE, "terminal_settlement", step=None, phase=PHASE)
+    cost = dataclasses.replace(cost, paid_week=week)
+    final.admin_cost_by_year[year] = cost
+    final.closed_admin_years.append(year)
+    final.admin_cost_paid += cost.amount
+    final.open_year = None
+    distributed = pf.ledger.rf_base
+    base = distribution_base(params.distribution_tax_base, distributed, initial_capital)
+    tax = base * params.distribution_rate
+    final.tax_events.append(TaxEvent(
+        week, DISTRIBUTION_TAX, "tax", "terminal", year, "portfolio", "", distributed, base,
+        params.distribution_rate, tax, None,
+        notes=f"distributed_amount={distributed!r} after liquidation costs and the final admin "
+              f"cost; base={params.distribution_tax_base}"
+              + (f" (distributed - initial capital {initial_capital!r})"
+                 if params.distribution_tax_base == "gain_only" else "")
+              + f"; {params.profile}", phase=PHASE))
+    if tax > 0:
+        pf.pay(week, tax, DISTRIBUTION_TAX, RF_BASE, "terminal_settlement", step=None, phase=PHASE)
+    final.distribution_tax_paid += tax
+    pf.ledger.check("foundation terminal settlement: ")
+    return FoundationTerminalResult(
+        last_week=week, final_tax_year=year, pre_terminal_ledger=snapshot.ledger,
+        pre_terminal_nav=snapshot.ledger.nav, liquidation_trades=trades, terminal_realizations=reals,
+        terminal_transaction_costs=math.fsum(t.transaction_cost for t in trades),
+        terminal_slippage=math.fsum(t.slippage for t in trades),
+        terminal_trading_costs=math.fsum([t.transaction_cost + t.slippage for t in trades]),
+        nav_after_liquidation=after_liq.nav, final_admin_cost=cost, distributed_amount=distributed,
+        distribution_tax_base_mode=params.distribution_tax_base, distribution_tax_base=base,
+        distribution_rate=params.distribution_rate, distribution_tax=tax,
+        terminal_capital_gains_tax=0.0, terminal_solidarity_tax=0.0, terminal_foundation_tax=tax,
+        terminal_tax_total=tax, terminal_transfers=tuple(pf.transfers),
+        terminal_payments=tuple(pf.payments), terminal_tax_events=tuple(final.tax_events[n_events:]),
+        after_tax_terminal_wealth=pf.ledger.nav, final_cash_ledger=pf.ledger,
+        tax_state_before_terminal=before, final_tax_state=final)
+
+
+@dataclass(frozen=True)
+class ShadowCostSettlement:
+    """Q-015 foundation pre-tax: the final-year admin cost is a cost, not a tax, so the pre-tax
+    wealth is the shadow's final NAV after paying it (TAX-006 waterfall, no full liquidation,
+    no distribution tax)."""
+    last_week: dt.date
+    pre_cost_nav: float
+    admin_cost: AdminCost
+    trades: tuple
+    payments: tuple
+    final_ledger: Ledger
+    final_wealth: float
+    final_state: FoundationState
+
+
+def settle_foundation_shadow_costs(snapshot: PortfolioSnapshot, params: FoundationParams,
+                                   state: FoundationState, inception: dt.date,
+                                   targets: dict, effective_states: dict) -> ShadowCostSettlement:
+    week = snapshot.week_key
+    final = state.copy()
+    pf = WorkingPortfolio.from_snapshot(snapshot)
+    cost = _final_admin_cost(params, final, inception, week)
+    ctx = WeekContext(week, None, -1, dict(targets), {}, dict(effective_states), dict(effective_states))
+    if cost.amount > 0:                     # rf_base -> reserves pro rata -> assets pro rata
+        sell_to_pay(pf, ctx, AmountsDue(cost.amount, ((ADMIN_COST, cost.amount),)),
+                    step=None, phase=PHASE)
+    cost = dataclasses.replace(cost, paid_week=week)
+    final.admin_cost_by_year[cost.year] = cost
+    final.tax_events.append(admin_cost_event(params, cost, "terminal"))
+    final.admin_cost_paid += cost.amount
+    final.open_year = None
+    pf.ledger.check("foundation shadow cost settlement: ")
+    return ShadowCostSettlement(week, snapshot.ledger.nav, cost, tuple(pf.trades),
+                                tuple(pf.payments), pf.ledger, pf.ledger.nav, final)

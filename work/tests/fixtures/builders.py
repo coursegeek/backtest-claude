@@ -148,3 +148,17 @@ def annual_tax_inputs(costs_bps=(10.0, 5.0), last="2002-01-18", reentry=True, ta
                          params={"stocks": params_for("stocks"),
                                  "gold": params_for("gold", threshold_off=0.9, threshold_on=0.9)},
                          costs=CostModel(*costs_bps))
+
+
+def foundation_hooks(inputs, profile="family_foundation_15", mode="signal-only", band_pp=None,
+                     **overrides):
+    """StrategicHooks composed with FoundationHooks; inception = first run week - 7 days."""
+    import dataclasses
+    from src.engine import ComposedHooks
+    from src.foundation import FoundationHooks, FoundationParams
+    from src.rebalancing import StrategicHooks
+    rate = 0.15 if profile.endswith("15") else 0.19
+    params = dataclasses.replace(FoundationParams(profile, distribution_rate=rate), **overrides)
+    start = inputs.run_start or inputs.weeks[0]
+    fh = FoundationHooks(params, start - WEEK)
+    return ComposedHooks(StrategicHooks(mode, band_pp), fh), fh

@@ -29,7 +29,9 @@ from .costs import CostModel
 from .engine import ComposedHooks, EngineInputs, WeekMarket, run_engine
 from .rebalancing import hooks_from_config
 from .metrics import PathSeries, RunMetrics, compute_run_metrics, cpi_window
-from .settlement import TerminalSettlementResult, settle_terminal
+from .foundation import FOUNDATION_PROFILES, FoundationHooks, FoundationParams, FoundationState
+from .settlement import (ShadowCostSettlement, TerminalSettlementResult,
+                         settle_foundation_shadow_costs, settle_foundation_terminal, settle_terminal)
 from .tax import IndividualTaxHooks, TaxState, tax_hooks_from_config
 from .models import RISKY_ASSETS, Severity, ValidationIssue, canonical_assets
 from .reporting import (SUMMARY_FIELDS, summary_row,
@@ -171,14 +173,21 @@ class PreTaxRun:
     engine: object
     inputs: EngineInputs
     note: str
+    terminal_cost: Optional[ShadowCostSettlement] = None   # foundation final-year admin cost
+
+    @property
+    def final_wealth(self) -> float:
+        """MET-001: final NAV of the weekly pre-tax path; for foundations after the final-year
+        admin cost (a cost, not a tax) paid outside the weekly path."""
+        return self.terminal_cost.final_wealth if self.terminal_cost else self.engine.final_ledger.nav
 
 
 def check_supported_run(cfg: ResolvedConfig) -> None:
-    """Fail clearly instead of producing partial results for unimplemented features."""
-    if cfg.get("tax.profile") not in ("none", "individual_pl"):
-        raise NotImplementedCommand(
-            f"tax.profile={cfg.get('tax.profile')}: foundation profiles are not implemented in "
-            "this build; tax.profile none and individual_pl are supported")
+    """Fail clearly instead of producing partial results for unimplemented features: foundation
+    parameters are validated before any data is loaded (distribution_schedule -> Q-037,
+    internal trading tax > 0 -> Q-047)."""
+    if cfg.get("tax.profile") in FOUNDATION_PROFILES:
+        FoundationParams.from_config(cfg)
 
 
 def dividend_mode_of(cfg: ResolvedConfig, assets) -> str:
@@ -371,18 +380,25 @@ def build_run(cfg: ResolvedConfig):
     return inputs, ctx
 
 
-def build_hooks(cfg: ResolvedConfig):
-    """Strategic funding policy (step 3/6) composed with the tax module (steps 2/5/6)."""
+def build_hooks(cfg: ResolvedConfig, inception: Optional[dt.date] = None):
+    """Strategic funding policy (step 3/6) composed with the profile module (steps 0/2/5/6):
+    individual_pl taxes or a foundation (which needs the inception date, Q-034)."""
     strategic = hooks_from_config(cfg)
+    if cfg.get("tax.profile") in FOUNDATION_PROFILES:
+        if inception is None:
+            raise ConfigError("foundation hooks need the inception date of the run")
+        return ComposedHooks(strategic, FoundationHooks(FoundationParams.from_config(cfg), inception))
     tax = tax_hooks_from_config(cfg)
     return ComposedHooks(strategic, tax) if tax is not None else strategic
 
 
-def find_tax_hooks(hooks) -> Optional[IndividualTaxHooks]:
-    if isinstance(hooks, IndividualTaxHooks):
+def find_tax_hooks(hooks):
+    """The profile module of a run (IndividualTaxHooks | FoundationHooks | None)."""
+    kinds = (IndividualTaxHooks, FoundationHooks)
+    if isinstance(hooks, kinds):
         return hooks
     for e in getattr(hooks, "extensions", ()):
-        if isinstance(e, IndividualTaxHooks):
+        if isinstance(e, kinds):
             return e
     return None
 
@@ -393,6 +409,18 @@ def run_pre_tax(cfg: ResolvedConfig, inputs: EngineInputs, actual, tax) -> PreTa
         return PreTaxRun("actual_run_no_taxes", actual, inputs,
                          "tax.profile=none: the actual weekly run has no taxes and is the "
                          "pre-tax path")
+    if isinstance(tax, FoundationHooks):
+        zero = tax.params.zero_rates()
+        fh = FoundationHooks(zero, tax.inception)
+        result = run_engine(inputs, ComposedHooks(hooks_from_config(cfg), fh))
+        cost = settle_foundation_shadow_costs(result.final_snapshot, zero, fh.state, tax.inception,
+                                              inputs.targets, result.weeks[-1].effective_states)
+        return PreTaxRun("shadow_zero_tax", result, inputs,
+                         "same EngineInputs object as the actual run; every tax rate set to 0 "
+                         "(dividend, RF, internal, distribution); setup and admin costs, "
+                         "transaction costs and slippage kept; the final-year admin cost is paid "
+                         "after the weekly path (TAX-006 waterfall, no full liquidation, no "
+                         "distribution tax)", cost)
     shadow = ComposedHooks(hooks_from_config(cfg), IndividualTaxHooks(tax.params.zero_rates()))
     return PreTaxRun("shadow_zero_tax", run_engine(inputs, shadow), inputs,
                      "same EngineInputs object as the actual run (weeks, markets, signals, "
@@ -423,13 +451,21 @@ def load_cpi_window(cfg: ResolvedConfig, inception, last_week, report):
 
 def run_portfolio(cfg: ResolvedConfig, write: bool = True, hooks=None) -> PortfolioRunResult:
     inputs, ctx = build_run(cfg)
-    hooks = hooks if hooks is not None else build_hooks(cfg)
+    inception = inception_date(ctx["first_week"])
+    hooks = hooks if hooks is not None else build_hooks(cfg, inception)
     result = run_engine(inputs, hooks)
     ctx["report"].extend(result.issues)
     tax = find_tax_hooks(hooks)
-    # IND-016/IND-020: terminal settlement on copies of the final state (never a weekly record);
-    # tax.profile=none has no terminal settlement (Q-032: only foundations remain open)
-    terminal = settle_terminal(result.final_snapshot, tax.params, tax.state) if tax else None
+    initial_capital = float(cfg.get("portfolio.initial_capital_pln"))
+    # IND-016/IND-020, Q-032: terminal settlement on copies of the final state (never a weekly
+    # record); tax.profile=none has no terminal settlement
+    if isinstance(tax, FoundationHooks):
+        terminal = settle_foundation_terminal(result.final_snapshot, tax.params, tax.state,
+                                              initial_capital, tax.inception)
+    elif tax is not None:
+        terminal = settle_terminal(result.final_snapshot, tax.params, tax.state)
+    else:
+        terminal = None
     pre_tax = run_pre_tax(cfg, inputs, result, tax)
     first, last = ctx["first_week"], result.weeks[-1].week_key
     cpi, window = load_cpi_window(cfg, inception_date(first), last, ctx["report"])
@@ -445,7 +481,8 @@ def run_portfolio(cfg: ResolvedConfig, write: bool = True, hooks=None) -> Portfo
         trades=result.trades, terminal_trades=terminal.liquidation_trades if terminal else (),
         week_states=[w.effective_states for w in result.weeks],
         assets=canonical_assets(inputs.params), mar_annual=float(cfg.get("metrics.sortino_mar_annual")),
-        cpi=window)
+        cpi=window, growth_base_nav=initial_capital,          # Q-033: before the setup cost
+        final_wealth_pre_tax=pre_tax.final_wealth)
     out = PortfolioRunResult(engine=result, **ctx, tax_state=tax.state if tax else None,
                              tax_params=tax.params if tax else None, terminal=terminal,
                              pre_tax=pre_tax, metrics=metrics, inputs=inputs, cpi_series=cpi)
@@ -472,6 +509,8 @@ def write_portfolio_outputs(cfg: ResolvedConfig, res: PortfolioRunResult) -> Pat
               dividend_rows(res.engine.dividend_reinvestments))
     write_csv(out / "trades.csv", TRADE_FIELDS,
               trade_rows(res.engine.trades + (t.liquidation_trades if t else ())))
+    # (the pre-tax shadow run is not written as a second set of CSV files; summary.csv and
+    #  data_manifest.json describe it, Q-015)
     write_csv(out / "payments.csv", PAYMENT_FIELDS,
               record_rows(res.engine.payments + (t.terminal_payments if t else ()), PAYMENT_FIELDS))
     write_csv(out / "rf_transfers.csv", TRANSFER_FIELDS,
@@ -492,7 +531,15 @@ def write_portfolio_outputs(cfg: ResolvedConfig, res: PortfolioRunResult) -> Pat
                         "note": "before_terminal = state at the end of the weekly path (final "
                                 "year still open); after_terminal = after terminal liquidation "
                                 "and final-year settlement"})
-    write_json(out / "tax_state.json", tax_doc)
+    if isinstance(res.tax_state, FoundationState):
+        tax_doc["pre_tax_shadow_final_cost"] = {
+            "final_admin_cost": res.pre_tax.terminal_cost.admin_cost.amount,
+            "pre_cost_nav": res.pre_tax.terminal_cost.pre_cost_nav,
+            "final_wealth_pre_tax": res.pre_tax.terminal_cost.final_wealth,
+            "trades": len(res.pre_tax.terminal_cost.trades)}
+        write_json(out / "foundation_state.json", tax_doc)
+    else:
+        write_json(out / "tax_state.json", tax_doc)
     write_csv(out / "summary.csv", SUMMARY_FIELDS, [summary_row(cfg, res)])
     manifest = build_manifest(res.provenances, res.as_of, ts, cfg.command)
     manifest.update({
@@ -511,9 +558,10 @@ def write_portfolio_outputs(cfg: ResolvedConfig, res: PortfolioRunResult) -> Pat
                                         res.engine.skipped_signal_observations],
         "audit_outputs": ["payments.csv", "rf_transfers.csv", "rebalance_events.csv",
                           "tax_events.csv", "realizations.csv", "dividend_reinvestments.csv",
-                          "tax_state.json"] + (["terminal_settlement.json"] if t else []),
-        "terminal_settlement": ("individual_pl: separate from the weekly path" if t else
-                                "none: no terminal settlement (after_tax_terminal_wealth = "
+                          "foundation_state.json" if isinstance(res.tax_state, FoundationState)
+                          else "tax_state.json"] + (["terminal_settlement.json"] if t else []),
+        "terminal_settlement": (f"{cfg.get('tax.profile')}: separate from the weekly path" if t
+                                else "none: no terminal settlement (after_tax_terminal_wealth = "
                                 "pre_terminal_nav, Q-032)"),
         "pre_tax_method": res.pre_tax.method,
         "pre_tax_note": res.pre_tax.note,

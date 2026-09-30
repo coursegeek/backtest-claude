@@ -258,3 +258,81 @@ def test_summary_reproducible(taxed, tmp_path):
     again = run_portfolio(ResolvedConfig("run", cli_layer=layer)).output_dir
     assert (res.output_dir / "summary.csv").read_bytes() == (again / "summary.csv").read_bytes()
     assert res.output_dir != again
+
+
+@pytest.fixture(scope="module")
+def foundation_runs(tmp_path_factory):
+    out = {}
+    for profile in ("family_foundation_15", "family_foundation_19"):
+        layer = json.loads(json.dumps(RUN))
+        layer["tax"] = {"profile": profile}
+        layer["report"] = {"output_dir": str(tmp_path_factory.mktemp(profile)), "run_name": profile}
+        out[profile] = run_portfolio(ResolvedConfig("run", cli_layer=layer))
+    return out
+
+
+def test_foundation_summary_and_events(foundation_runs):
+    """TEST-024 (foundation), MET-019, REP-017, REP-019, Q-035: summary.total_tax_paid ==
+    sum(tax_events category=tax) (dividend + RF + distribution tax; setup/admin costs and
+    transaction costs excluded); foundation_distribution_tax_paid, setup and admin costs are
+    separate fields; terminal breakout with a non-zero terminal_foundation_tax."""
+    for profile, res in foundation_runs.items():
+        out = res.output_dir
+        row = _summary(out)
+        ev = read_rows(out, "tax_events.csv")
+        taxes = math.fsum(float(e["amount"]) for e in ev if e["category"] == "tax")
+        assert float(row["total_tax_paid"]) == pytest.approx(taxes, rel=1e-12)
+        dist = [e for e in ev if e["event_type"] == "foundation_distribution_tax"]
+        assert len(dist) == 1 and dist[0]["settlement"] == "terminal" and dist[0]["phase"] == "terminal"
+        assert float(row["foundation_distribution_tax_paid"]) == float(dist[0]["amount"]) > 0
+        assert float(row["terminal_foundation_tax"]) == float(row["terminal_tax_total"]) == float(dist[0]["amount"])
+        assert float(row["terminal_capital_gains_tax"]) == float(row["terminal_solidarity_tax"]) == 0.0
+        costs = [e for e in ev if e["category"] == "cost"]
+        assert {e["event_type"] for e in costs} == {"foundation_setup_cost", "foundation_annual_admin_cost"}
+        assert float(row["foundation_setup_cost_paid"]) == 40_000.0
+        admin = math.fsum(float(e["amount"]) for e in costs if e["event_type"] == "foundation_annual_admin_cost")
+        assert float(row["foundation_admin_cost_paid"]) == pytest.approx(admin, rel=1e-12)
+        assert float(row["foundation_admin_cost_weekly"]) + float(row["foundation_admin_cost_terminal"]) == \
+            pytest.approx(admin, rel=1e-12)
+        weekly = read_rows(out, "weekly_portfolio.csv")
+        assert math.fsum(float(r["costs_paid"]) for r in weekly) == pytest.approx(
+            float(row["foundation_admin_cost_weekly"]), rel=1e-12)
+        assert math.fsum(float(r["taxes_paid"]) for r in weekly) + float(row["terminal_tax_total"]) == \
+            pytest.approx(float(row["total_tax_paid"]), rel=1e-12)
+        doc = json.loads((out / "terminal_settlement.json").read_text())
+        assert float(row["pre_terminal_nav"]) == doc["pre_terminal_nav"] == float(weekly[-1]["nav_end"])
+        assert float(row["after_tax_terminal_wealth"]) == doc["after_tax_terminal_wealth"] == pytest.approx(
+            float(row["distributed_amount"]) - float(row["terminal_foundation_tax"]), rel=1e-12)
+        assert float(row["distributed_amount"]) == pytest.approx(
+            float(row["pre_terminal_nav"]) - float(row["terminal_liquidation_costs"])
+            - float(row["foundation_admin_cost_terminal"]), rel=1e-12)
+        term = [t for t in read_rows(out, "trades.csv") if t["phase"] == "terminal"]
+        assert {t["reason"] for t in term} == {"foundation_distribution_liquidation"}
+        assert (out / "foundation_state.json").is_file() and not (out / "tax_state.json").exists()
+        st = json.loads((out / "foundation_state.json").read_text())
+        assert "loss_buckets" not in json.dumps(st)
+        assert row["pre_tax_method"] == "shadow_zero_tax" and float(row["pre_tax_final_admin_cost"]) == \
+            float(row["foundation_admin_cost_terminal"])
+        assert (float(row["initial_capital"]), float(row["investable_initial_capital"])) == (1_000_000.0, 960_000.0)
+
+
+def test_foundation_15_vs_19_only_terminal_differs(foundation_runs):
+    """Same configuration: identical weekly path (costs, dividend taxes, trades, weekly NAV,
+    pre_terminal_nav) - only the distribution rate, terminal_foundation_tax, after-tax wealth
+    and after-tax CAGR differ."""
+    a, b = foundation_runs["family_foundation_15"], foundation_runs["family_foundation_19"]
+    for name in ("weekly_portfolio.csv", "trades.csv", "payments.csv", "rf_transfers.csv",
+                 "rebalance_events.csv", "signals.csv", "realizations.csv", "dividend_reinvestments.csv"):
+        ra = [r for r in read_rows(a.output_dir, name) if r.get("phase", "weekly") == "weekly"]
+        rb = [r for r in read_rows(b.output_dir, name) if r.get("phase", "weekly") == "weekly"]
+        assert ra == rb, name
+    wa = [e for e in read_rows(a.output_dir, "tax_events.csv") if e["settlement"] != "terminal"]
+    wb = [e for e in read_rows(b.output_dir, "tax_events.csv") if e["settlement"] != "terminal"]
+    assert wa == wb
+    sa, sb = _summary(a.output_dir), _summary(b.output_dir)
+    differ = {k for k in sa if sa[k] != sb[k]}
+    assert differ == {"run_name", "tax_profile", "terminal_foundation_tax", "terminal_tax_total",
+                      "foundation_distribution_tax_paid", "total_tax_paid", "after_tax_terminal_wealth",
+                      "after_tax_cagr", "after_tax_real_cagr", "after_tax_calmar",
+                      "applied_distribution_rate"}
+    assert float(sb["terminal_foundation_tax"]) / float(sa["terminal_foundation_tax"]) == pytest.approx(19 / 15)

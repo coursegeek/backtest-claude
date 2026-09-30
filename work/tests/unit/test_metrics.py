@@ -174,3 +174,56 @@ def test_default_sortino_mar():
     assert r.metrics.sortino == metrics.sortino(metrics.PathSeries.from_engine(r.engine).returns, 0.0)
     r4 = run_portfolio(cfg(metrics={"sortino_mar_annual": 0.04}), write=False)
     assert r4.metrics.sortino < r.metrics.sortino
+
+
+def test_foundation_shadow_final_cost():
+    """Q-015 foundation: the pre-tax shadow keeps setup/admin costs and trading costs, zeroes
+    every tax, runs on the identical EngineInputs; the final-year admin cost is paid after the
+    weekly shadow path through the TAX-006 waterfall (rf_base first, no full liquidation, no
+    distribution tax) and final_wealth_pre_tax is the value after it."""
+    r = run_portfolio(cfg("family_foundation_15"), write=False)
+    sc = r.pre_tax.terminal_cost
+    assert r.pre_tax.method == "shadow_zero_tax" and r.pre_tax.inputs is r.inputs
+    shadow = r.pre_tax.engine
+    assert shadow.initial_ledger.nav == r.engine.initial_ledger.nav == 960_000.0
+    assert sc.admin_cost.amount == r.terminal.final_admin_cost.amount > 0
+    assert sc.pre_cost_nav == shadow.final_ledger.nav
+    trading = math.fsum(t.transaction_cost + t.slippage for t in sc.trades)
+    assert sc.final_wealth == pytest.approx(sc.pre_cost_nav - sc.admin_cost.amount - trading, rel=1e-12)
+    assert r.metrics.final_wealth_pre_tax == sc.final_wealth
+    assert (sc.final_ledger.stocks, sc.final_ledger.gold) != (0.0, 0.0)     # no full liquidation
+    assert all(t.phase == "terminal" for t in sc.trades) and all(p.phase == "terminal" for p in sc.payments)
+    assert sc.payments and sc.payments[0].funding_source == "rf_base"
+    assert not [e for e in sc.final_state.tax_events if e.category == "tax"]
+    assert sc.final_state.setup_cost_paid == 40_000.0
+    assert sc.final_state.admin_cost_paid == pytest.approx(r.terminal.final_tax_state.admin_cost_paid, rel=1e-12)
+    # the cost is not a weekly record of the shadow path
+    assert len(shadow.weeks) == len(r.engine.weeks) and r.metrics.max_drawdown == metrics.max_drawdown(
+        metrics.nav_path(960_000.0, [w.nav_end for w in shadow.weeks]))
+
+
+def test_existing_profiles_unchanged_by_base_split():
+    """Q-033 refactor regression: none and individual_pl keep growth base = path start = initial
+    capital and the values produced before the refactor (staged data, quarterly, 10+5 bps,
+    2018-01-01..2026-07-31)."""
+    base = {"allocation": {"targets": "stocks=0.6,gold=0.2,btc=0.2"},
+            "run": {"start": "2018-01-01", "end": "2026-07-31", "as_of_date": "2026-09-29"},
+            "portfolio": {"rebalance": "quarterly", "transaction_cost_bps": 10.0, "slippage_bps": 5.0}}
+    expected = {
+        "none": dict(final_wealth_pre_tax=4458360.052609325, after_tax_terminal_wealth=4458360.052609325,
+                     cagr=0.19016696735861927, after_tax_cagr=0.19016696735861927,
+                     max_drawdown=0.2633136071330905, sharpe=0.9449084409359356,
+                     real_cagr=0.14884044056549595, turnover=7.049316332467002),
+        "individual_pl": dict(final_wealth_pre_tax=4384715.759339228,
+                              after_tax_terminal_wealth=3531129.440069668, cagr=0.1901707002318782,
+                              after_tax_cagr=0.16020425957356865, max_drawdown=0.2633136071330905,
+                              after_tax_max_drawdown=0.3142832146394996, sharpe=0.9422979969067643,
+                              after_tax_sharpe=0.8518537321342441, real_cagr=0.14837211644399595,
+                              turnover=6.938712158429536)}
+    for profile, values in expected.items():
+        layer = {k: dict(v) for k, v in base.items()}
+        layer["tax"] = {"profile": profile}
+        m = run_portfolio(ResolvedConfig("run", cli_layer=layer), write=False).metrics
+        assert m.growth_base_nav == m.path_start_nav == m.nav_start == 1_000_000.0
+        for k, v in values.items():
+            assert getattr(m, k) == v, (profile, k)

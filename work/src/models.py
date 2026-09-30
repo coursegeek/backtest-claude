@@ -318,9 +318,9 @@ class RunCalendar:
 
 
 class TradeReason(str, Enum):
-    """Reason codes of every trade (REP-004). The current build produces the signal,
-    calendar/band rebalance and sell_to_pay reasons; walk_forward_rebalance and
-    terminal_liquidation are reserved for walk-forward and terminal settlement."""
+    """Reason codes of every trade (REP-004): signal, calendar/band rebalance, sell_to_pay,
+    terminal_liquidation (individual_pl) and foundation_distribution_liquidation (foundation
+    terminal settlement); walk_forward_rebalance is reserved for walk-forward."""
     SIGNAL_EXIT = "signal_exit"
     SIGNAL_REENTRY = "signal_reentry"
     CALENDAR_REBALANCE = "calendar_rebalance"
@@ -328,6 +328,7 @@ class TradeReason(str, Enum):
     SELL_TO_PAY = "sell_to_pay"
     WALK_FORWARD_REBALANCE = "walk_forward_rebalance"
     TERMINAL_LIQUIDATION = "terminal_liquidation"
+    FOUNDATION_DISTRIBUTION_LIQUIDATION = "foundation_distribution_liquidation"
 
 
 @dataclass(frozen=True)

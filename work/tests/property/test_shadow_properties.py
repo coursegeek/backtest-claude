@@ -19,13 +19,14 @@ def cfg(profile, mode):
 
 
 @pytest.mark.parametrize("mode", ["signal-only", "monthly", "band"])
-@pytest.mark.parametrize("profile", ["none", "individual_pl"])
+@pytest.mark.parametrize("profile", ["none", "individual_pl", "family_foundation_15"])
 def test_shadow_inputs_identical_and_unchanged(profile, mode):
     c = cfg(profile, mode)
     inputs, ctx = build_run(c)
     frozen = pickle.dumps(inputs)
     markets = {w: id(m) for w, m in inputs.market.items()}
-    hooks = build_hooks(c)
+    from src.calendar import inception_date
+    hooks = build_hooks(c, inception_date(ctx["first_week"]))
     actual = run_engine(inputs, hooks)
     pre = run_pre_tax(c, inputs, actual, find_tax_hooks(hooks))
     assert pre.inputs is inputs and pickle.dumps(inputs) == frozen
@@ -36,7 +37,9 @@ def test_shadow_inputs_identical_and_unchanged(profile, mode):
     if profile == "none":
         assert pre.engine is actual
     else:
-        assert pre.method == "shadow_zero_tax" and not pre.engine.payments
+        assert pre.method == "shadow_zero_tax"
+        # only costs are paid in a shadow (none for individual_pl; foundation admin costs)
+        assert {p.event_type for p in pre.engine.payments} <= {"foundation_annual_admin_cost"}
         # signals do not depend on taxes: identical signal records
         assert pre.engine.signal_records == actual.signal_records
         costs = {t.transaction_cost / t.gross_traded_value for t in pre.engine.trades}
