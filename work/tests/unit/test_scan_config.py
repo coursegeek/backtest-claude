@@ -177,10 +177,11 @@ def test_invalid_grids_fail_before_data(argv, msg):
 
 
 def test_foundation_constraints_stop_the_scan_before_data():
-    """Q-037 / Q-047 stay explicit errors inside scans (never bypassed for a grid)."""
+    """Foundation configuration errors (a schedule without its file, Q-037) stop the scan at
+    its first grid point before any data (never bypassed for a grid)."""
     with pytest.raises(scans.ScanError) as e:
         scans.resolve_scan(resolve(["delay-scan", "--asset", "stocks", "--tax-profile",
                                     "family_foundation_15", "--foundation-tax-event",
                                     "distribution_schedule"]))
-    assert isinstance(e.value.cause, NotImplementedCommand) and "Q-037" in str(e.value)
-    assert e.value.point.grid_index == 1 and e.value.exit_code == 3
+    assert isinstance(e.value.cause, ConfigError) and "Q-037" in str(e.value)
+    assert e.value.point.grid_index == 1 and e.value.exit_code == 2

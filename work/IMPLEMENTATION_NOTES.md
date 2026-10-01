@@ -16,10 +16,11 @@ fundacji (`src/foundation.py`), terminal settlement (`src/settlement.py`), pre-t
 walk-forward (`src/walk_forward.py`). Sesja 13 domknęła tanie MUST przed decyzją Q-037/Q-047
 (CLI-001/007/008/009, TEST-020, TEST-023; Q-011/013/024/025/038 RESOLVED) bez nowej
 funkcjonalności silnika.
-Nie ma jeszcze: `tax.foundation.tax_event=distribution_schedule` (Q-037, jawny błąd),
-niezerowego internal trading tax fundacji (Q-047, jawny błąd), rolling_metrics.csv
-(MET-022/023, SHOULD). Te tryby kończą się kodem 3 z jawnym komunikatem (bez częściowych
-wyników).
+Sesja 14 domknęła ostatnie MUST `IN_PROGRESS`: niezerowy internal trading tax fundacji (Q-047)
+i `tax.foundation.tax_event=distribution_schedule` (Q-037). Nie ma jeszcze (SHOULD):
+rolling_metrics.csv (MET-022/023), tabela konsolowa (REP-011), `spread_annual_dps` (DIV-009).
+Jedynym niezdefiniowanym przypadkiem jest kombinacja `distribution_schedule` z niezerowym internal
+trading tax (ConfigError, punkt 126). Wszystkie MUST poza pięcioma DATA_BLOCKER są `PASS`.
 
 Źródło prawdy dla statusów: `compliance_matrix.csv`; pytania: `implementation_questions.csv`.
 
@@ -856,3 +857,89 @@ Warstwy: `models`, `errors`, `config`, `calendar`, `availability`, `data_loader`
     trailing/annual DPS; `use_supplied_dividend_return` działa), MET-022/023 rolling metrics,
     REP-011 tabela konsolowa. MUST nie-PASS: FND-002 (Q-047), FND-005 (Q-037) oraz 5 wierszy
     DATA_BLOCKER (SEM-001, SEM-003, SCHEMA-005, SEM-007, TEST-038).
+
+## Fundacje: internal trading tax i distribution_schedule (sesja 14)
+
+120. **Q-047 (RESOLVED) - internal trading tax > 0**: osobna warstwa od podatku od dywidend,
+    RF i dystrybucji. Rok Friday-key Y: `annual_internal_realized` = suma realized_gain
+    wszystkich sprzedaży stocks/gold/BTC fundacji w Y (sygnały, rebalancing, sell_to_pay,
+    rebalance walk-forward, finansowanie dystrybucji, likwidacja terminalna), netting w roku,
+    podstawa max(0, ...), podatek = podstawa x stawka; bez loss buckets, carry-forward i daniny
+    (strata roku przepada). Ustalenie w kroku 2 pierwszego zachowanego tygodnia Y+1 (TaxEvent
+    `foundation_internal_trading_tax`, tax, annual, step 2 - także z kwotą 0 dla audytu),
+    płatność w kroku 3 (TAX-007 albo TAX-006); sprzedaże finansujące podatek są realizacjami
+    Y+1. Przy domyślnej stawce 0 nie powstają żadne zdarzenia (wyniki bajtowo identyczne).
+    Przykład (TEST-015, stawka 0.10): 2000 = jedna sprzedaż sygnałowa 672 000 x 0.9985 -
+    336 000 = 334 992 -> podatek 33 499.20 ustalony i zapłacony 2001-01-05; rok straty
+    -168 252 + 35 730 = -132 522 -> podatek 0, 2001 opodatkowany w całości.
+121. **Rok finalny (tax_event=terminal)**: likwidacja -> realizacje terminalne do roku
+    finalnego -> zamknięcie roku internal tax (event terminal, phase terminal, step None) ->
+    konsolidacja RF -> zapłata internal tax -> koszt admin roku finalnego -> distributed_amount
+    -> distribution tax -> after_tax_terminal_wealth. `terminal_foundation_tax` = internal tax
+    roku finalnego + distribution tax; osobna kolumna `terminal_internal_trading_tax`.
+    Przykład (fixture roczny): pre_terminal_nav 1 768 220.65, koszty likwidacji 2 652.33,
+    realizacje roku 2002 549 967.63 -> internal tax 54 996.76, admin 1 972.60, distributed
+    1 708 598.95, distribution tax 15% 256 289.84, after-tax 1 452 309.11.
+122. **Q-037 (RESOLVED) - distribution_schedule**: wymaga `tax.foundation.distribution_file`
+    (`--distribution-file`); brak klucza, pliku albo błędny wiersz -> ConfigError (bez fallbacku
+    do terminal). CSV `date,amount` i/lub `date,percent_nav`, w każdym wierszu dokładnie jedno:
+    amount > 0 PLN (brutto), 0 < percent_nav <= 1 (ułamek dziesiętny, nie procent CLI).
+    Harmonogram jest egzogenicznym planem (nie dane rynkowe, nie uczestniczy w przecięciu
+    kalendarza): data -> piątek tego samego tygodnia (nominal_week); tydzień usunięty z
+    kalendarza -> następny zachowany tydzień (actual_week); wiersze przed pierwszym / po
+    ostatnim tygodniu runu ignorowane z ostrzeżeniem `distribution_row_ignored`; wiele wierszy
+    w tygodniu wg (scheduled_date, indeks wiersza). Manifest: path, SHA-256, liczba wierszy,
+    min/max data, liczba wierszy amount i percent_nav.
+123. **Semantyka brutto (Q-037)**: wiersz D to wypłata brutto zdejmowana z NAV fundacji;
+    podatek T jest potrącany z D, beneficjent dostaje D - T, odpływ NAV = D (nigdy D + T).
+    percent_nav: D = p x NAV_after_signal kroku 2 (po transakcjach sygnałowych, przed
+    amounts_due, rebalancingiem i zwrotami tygodnia). Krok 2: jedna pozycja finansowania
+    `foundation_distribution_gross` = D na wiersz (razem z kosztem admin w tym samym tygodniu;
+    księga widzi D niezależnie od stawki, więc ścieżka NAV fundacji 15% i 19% jest bajtowo
+    identyczna); krok 3: TAX-007 przy rebalancingu (NAV_net = NAV_after_signal - suma
+    należności), inaczej TAX-006 z powodem sprzedaży `foundation_distribution_liquidation`
+    (koszty i slippage, REB-011). Po sfinansowaniu każda opłacona część jest zapisana jako
+    Payment `foundation_distribution_tax` (T) + `foundation_distribution_net` (D - T) -
+    `WorkingPortfolio.split_payment` dzieli tylko rekord, księga nie jest obciążana drugi raz.
+    TaxEvent tylko dla podatku (settlement `scheduled`, phase weekly, step 2); wypłata netto nie
+    jest podatkiem, kosztem ani transakcją; audyt w `distributions.csv` (scheduled_date,
+    nominal_week, actual_week, paid_week, kind, value, nav_base, gross, tax_base, tax, net,
+    basis). weekly_portfolio.csv: `gross_distributions_paid` = `net_distributions_paid` +
+    `distribution_tax_paid` (payments = koszty + podatki roczne + wypłaty netto).
+124. **Podstawa dystrybucji**: distributed_amount -> każda wypłata D; gain_only -> kumulatywna
+    baza `distribution_capital_basis_remaining` (start = initial_capital_pln przed setup):
+    capital_return = min(D, basis), podstawa = D - capital_return, basis -= capital_return -
+    skumulowane wypłaty <= kapitał początkowy dają 0, podatek tylko od skumulowanej nadwyżki,
+    niezależnie od podziału i kolejności (jedna wypłata 1.2 mln = 0.6 + 0.6 mln -> podstawa
+    0.2 mln przy kapitale 1 mln).
+125. **Koniec w trybie schedule i metryki (świadoma semantyka Q-037)**: brak pełnej
+    likwidacji `foundation_distribution_liquidation` i brak terminalnego podatku od
+    dystrybucji tylko dlatego, że backtest się kończy; po ostatnim tygodniu (lub ostatnim
+    tygodniu OOS) pobierany jest wyłącznie koszt admin roku finalnego (FND-011, waterfall),
+    portfel pozostaje zainwestowany. `after_tax_terminal_wealth` = pozostały NAV fundacji +
+    skumulowane wypłaty **netto**; pre-tax shadow wykonuje ten sam harmonogram brutto ze
+    stawkami 0: `final_wealth_pre_tax` = pozostały NAV shadow + skumulowane wypłaty **brutto**
+    (koszty setup/admin pozostają). Tygodniowa ścieżka NAV maleje o każdą wypłatę brutto, więc
+    drawdown może zawierać wpływ rzeczywistych wypłat; terminal nie tworzy sztucznego
+    drawdownu; otrzymane wypłaty dodawane są dopiero do terminal wealth / licznika CAGR.
+    summary.csv: `foundation_gross_distributions_paid`, `foundation_net_distributions_paid`,
+    `foundation_distribution_tax_paid`, `distribution_capital_basis_remaining`;
+    `distributed_amount` puste i podatki terminalne 0. W trybie terminal nowe pola mają 0 /
+    puste, znaczenie istniejących pól bez zmian.
+126. **Ograniczenie (zapisane w data_manifest.json `foundation_limitations`)**:
+    `distribution_schedule` razem z `internal_trading_tax_rate > 0` nie jest zdefiniowane przez
+    adjudykację (brak semantyki roku finalnego bez likwidacji przy wymuszonych sprzedażach) ->
+    ConfigError "non-zero foundation internal trading tax with distribution_schedule is not
+    defined by clean-room specification adjudication". FND-002 i FND-005 są PASS: niezerowy
+    internal tax jest w pełni obsługiwany w trybie terminal, oba tryby FND-005 przy stawce 0.
+127. **Walk-forward**: FoundationState (internal_tax_by_year, closed_internal_tax_years,
+    sumy wypłat, baza gain_only, distribution_events) przechodzi przez granice okien;
+    harmonogram jest mapowany raz na sklejony kalendarz OOS, więc każdy wiersz jest wypłacany
+    dokładnie raz (wiersz tylko w historii treningowej jest ignorowany przez ścieżkę OOS z
+    ostrzeżeniem); kandydaci treningowi stosują wiersze swojego zakresu do własnej hipotetycznej
+    oceny. Przy stałej selekcji sklejona ścieżka jest dokładnie równa jednemu ciągłemu runowi
+    (internal tax ustalany w pierwszym tygodniu nowego okna; wypłaty i baza przenoszone).
+128. **Zgodność wsteczna**: domyślna konfiguracja fundacji (stawka 0, tax_event=terminal) daje
+    bajtowo identyczne wyniki poza nowymi zerowymi/pustymi kolumnami i kluczami (24 komendy
+    regresji: 241 plików bajtowo identycznych, pozostałe różnią się tylko nowymi polami 0/puste).
+    Tydzień, w którym harmonogram wypłaci cały NAV, kończy ścieżkę z NAV 0 (zwrot tygodnia 0).

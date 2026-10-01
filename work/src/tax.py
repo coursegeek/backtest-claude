@@ -40,6 +40,7 @@ EVENT_CATEGORY = {
     "capital_gains_tax": "tax",
     "solidarity_tax": "tax",
     "foundation_distribution_tax": "tax",
+    "foundation_internal_trading_tax": "tax",
     "foundation_setup_cost": "cost",
     "foundation_annual_admin_cost": "cost",
 }

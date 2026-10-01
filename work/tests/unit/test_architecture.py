@@ -67,7 +67,7 @@ def test_settlement_is_a_separate_layer():
 def test_foundation_module_boundaries():
     """TAX-001: foundation rules live in src/foundation.py; it shares only the step-5 primitive
     and the TaxEvent record with the individual module (no loss buckets / CG)."""
-    assert imports("foundation") <= {"engine", "errors", "tax"}
+    assert imports("foundation") <= {"calendar", "engine", "errors", "models", "tax"}
     text = (SRC / "foundation.py").read_text(encoding="utf-8")
     assert "LossBucket" not in text and "close_tax_year" not in text
     for mod in ("engine", "tax", "rebalancing", "sell_to_pay", "ledger"):

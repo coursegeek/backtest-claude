@@ -24,7 +24,8 @@ import yaml
 from .calendar import WEEK, aggregate_daily_last, friday_key, week_start_to_key
 from .errors import (DataFileNotFound, DataValidationError, DividendModeError, MissingColumns,
                      ConfigError)
-from .models import (CpiSeries, DividendPoint, DividendSeries, FFData, PricePoint, PriceSeries,
+from .models import (CpiSeries, DistributionSchedule, DividendPoint, DividendSeries, FFData,
+                     PricePoint, PriceSeries, ScheduledDistribution,
                      Provenance, ReturnPoint, ReturnSeries, Severity, SourceSegment,
                      ValidationIssue)
 
@@ -645,6 +646,72 @@ def load_cpi(path, config_key="data.cpi_file", missing_policy="previous_availabl
 
 
 # ============================================================================ resolution
+DISTRIBUTION_KEY = "tax.foundation.distribution_file"
+
+
+def load_distribution_schedule(cfg) -> DistributionSchedule:
+    """FND-009 / Q-037: the foundation distribution schedule - CSV ``date,amount`` and/or
+    ``date,percent_nav``; in every row exactly one of amount (gross PLN, > 0) and percent_nav
+    (decimal fraction of NAV_after_signal, 0 < p <= 1) is filled. A missing key, a missing file
+    or an invalid row is a ConfigError (never a fallback to tax_event=terminal). The schedule
+    is an exogenous plan: it does not take part in the market calendar intersection."""
+    requested = cfg.get(DISTRIBUTION_KEY)
+    if not requested:
+        raise ConfigError(f"tax.foundation.tax_event=distribution_schedule requires "
+                          f"{DISTRIBUTION_KEY} (--distribution-file) (FND-009, Q-037)")
+    path = Path(requested)
+    if not path.is_file() and not path.is_absolute():
+        path = Path(cfg.get("data.dir")) / requested
+    if not path.is_file():
+        raise ConfigError(f"{DISTRIBUTION_KEY}: distribution schedule file {requested!r} not "
+                          f"found (FND-009, Q-037)")
+    raw = path.read_bytes()
+    reader = csv.DictReader(io.StringIO(decode(raw)))
+    header = [h.strip() for h in (reader.fieldnames or [])]
+    if "date" not in header or not {"amount", "percent_nav"} & set(header):
+        raise ConfigError(f"{path}: distribution schedule needs the columns date and amount and/or "
+                          f"percent_nav, got {header} (FND-009)")
+    rows = []
+    for i, r in enumerate(reader, start=1):
+        r = {(k or "").strip(): (v or "").strip() for k, v in r.items()}
+        where = f"{path}: row {i}"
+        try:
+            day = dt.date.fromisoformat(r["date"])
+        except ValueError:
+            raise ConfigError(f"{where}: invalid date {r['date']!r} (YYYY-MM-DD)") from None
+        amount, pct = r.get("amount", ""), r.get("percent_nav", "")
+        if bool(amount) == bool(pct):
+            raise ConfigError(f"{where}: exactly one of amount and percent_nav must be filled "
+                              f"(amount={amount!r}, percent_nav={pct!r})")
+        try:
+            value = float(amount or pct)
+        except ValueError:
+            raise ConfigError(f"{where}: non-numeric {'amount' if amount else 'percent_nav'} "
+                              f"{amount or pct!r}") from None
+        if not math.isfinite(value):
+            raise ConfigError(f"{where}: non-finite value {amount or pct!r}")
+        if amount and not value > 0:
+            raise ConfigError(f"{where}: amount must be > 0 PLN, got {value!r}")
+        if pct and not 0.0 < value <= 1.0:
+            raise ConfigError(f"{where}: percent_nav is a decimal fraction with 0 < p <= 1, got "
+                              f"{value!r} (not a CLI percent)")
+        rows.append(ScheduledDistribution(i, day, value if amount else None, value if pct else None))
+    if not rows:
+        raise ConfigError(f"{path}: the distribution schedule has no rows (FND-009)")
+    dates = [x.scheduled_date for x in rows]
+    prov = Provenance(
+        role="distribution_schedule", path=str(path), sha256=sha256_bytes(raw),
+        config_key=DISTRIBUTION_KEY, adapter="distribution_schedule", canonical=True,
+        raw_rows=len(rows), used_rows=len(rows), raw_first_date=min(dates),
+        raw_last_date=max(dates), first_key=None, last_key=None,
+        date_convention="scheduled date -> Friday key of its Monday-Sunday week; a removed "
+                        "week -> the next retained run week (Q-037)",
+        extra=(("amount_rows", sum(1 for x in rows if x.amount is not None)),
+               ("percent_nav_rows", sum(1 for x in rows if x.percent_nav is not None)),
+               ("exogenous_schedule", "not part of the market calendar intersection")))
+    return DistributionSchedule(tuple(rows), prov)
+
+
 def load_profile(path) -> dict:
     if not path:
         return {}

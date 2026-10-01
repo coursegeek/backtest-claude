@@ -15,9 +15,9 @@ CPI window included) and execution (``run_prepared``: engine, terminal settlemen
 shadow, metrics, outputs); execution never reloads or realigns data.
   * ``optimize``    - in-sample weight-grid optimizer (``optimizer.py``, OPT-001..010, Q-041)
                       and walk-forward (``walk_forward.py``, WF-001..016, Q-022).
-Everything else (distribution_schedule, foundation internal trading tax > 0)
-resolves and validates its configuration and then stops with a clear NotImplementedCommand;
-no partial results are produced.
+Foundations support tax_event terminal and distribution_schedule (Q-037) and a non-zero
+internal trading tax in terminal mode (Q-047); their undefined combination is a ConfigError.
+Unsupported features stop with a clear error before any output; no partial results are produced.
 """
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ from .allocation import active_risky_assets, strategic_targets
 from .calendar import (common_range, elapsed_days, first_key_on_or_after, first_return_week,
                        inception_date, last_key_on_or_before, last_return_week)
 from .config import ResolvedConfig
-from .data_loader import load_dividend_cash, load_role
+from .data_loader import load_distribution_schedule, load_dividend_cash, load_role
 from .errors import (BacktestError, ConfigError, DataFileNotFound, DataValidationError,
                      DividendModeError, InsufficientHistoryError, NotImplementedCommand,
                      WarmupError)
@@ -43,16 +43,18 @@ from .costs import CostModel
 from .engine import ComposedHooks, EngineInputs, WeekMarket, run_engine
 from .rebalancing import hooks_from_config
 from .metrics import PathSeries, RunMetrics, compute_run_metrics, cpi_window
-from .foundation import FOUNDATION_PROFILES, FoundationHooks, FoundationParams, FoundationState
-from .settlement import (ShadowCostSettlement, TerminalSettlementResult,
-                         settle_foundation_shadow_costs, settle_foundation_terminal, settle_terminal)
+from .foundation import (FOUNDATION_PROFILES, SCHEDULE, FoundationHooks, FoundationParams,
+                         FoundationState, map_distribution_schedule)
+from .settlement import (ShadowCostSettlement, TerminalSettlementResult, settle_foundation,
+                         settle_foundation_shadow_costs, settle_terminal)
 from .tax import IndividualTaxHooks, TaxState, tax_hooks_from_config
 from .models import RISKY_ASSETS, Severity, ValidationIssue, canonical_assets
 from .reporting import (SUMMARY_FIELDS, summary_row,
-                        DIVIDEND_FIELDS, NORMALIZED_FIELDS, PAYMENT_FIELDS, REALIZATION_FIELDS,
+                        DISTRIBUTION_FIELDS, DIVIDEND_FIELDS, NORMALIZED_FIELDS, PAYMENT_FIELDS, REALIZATION_FIELDS,
                         REBALANCE_FIELDS, SIGNAL_FIELDS, TAX_EVENT_FIELDS, TRADE_FIELDS,
                         TRANSFER_FIELDS, VALIDATION_FIELDS, dividend_rows, rebalance_rows,
                         realization_rows, record_rows, tax_event_rows, terminal_settlement_doc,
+                        distribution_rows,
                         normalized_price_rows, normalized_return_rows, run_directory,
                         signal_rows, trade_rows, weekly_portfolio_fields, weekly_portfolio_rows,
                         write_csv, write_json)
@@ -215,6 +217,7 @@ class PreparedRun:
     cpi_window: Optional[object] = None
     warmup_weeks: dict = field(default_factory=dict)   # asset -> verified warm-up requirement
     first_week_rule: str = "run.start"
+    distribution_schedule: Optional[object] = None     # Q-037 foundation schedule (exogenous)
 
     @property
     def inception(self) -> dt.date:
@@ -599,19 +602,21 @@ def first_warmup_week(returns, start, end, keys: dict, need: dict) -> dt.date:
 
 
 def build_hooks(cfg: ResolvedConfig, inception: Optional[dt.date] = None, *, funding=None,
-                tax_state=None, zero_rates: bool = False):
+                tax_state=None, zero_rates: bool = False, distributions: Optional[dict] = None):
     """Strategic funding policy (step 3/6) composed with the profile module (steps 0/2/5/6):
     individual_pl taxes or a foundation (which needs the inception date, Q-034). Walk-forward
     continuation passes its own ``funding`` policy (boundary rebalance, carried band trigger)
     and the carried ``tax_state`` (TaxState / FoundationState); ``zero_rates`` builds the
-    pre-tax shadow policy of the profile (Q-015)."""
+    pre-tax shadow policy of the profile (Q-015); ``distributions`` the scheduled foundation
+    distributions of the run, mapped to its retained weeks (Q-037)."""
     strategic = funding if funding is not None else hooks_from_config(cfg)
     if cfg.get("tax.profile") in FOUNDATION_PROFILES:
         if inception is None:
             raise ConfigError("foundation hooks need the inception date of the run")
         params = FoundationParams.from_config(cfg)
         params = params.zero_rates() if zero_rates else params
-        return ComposedHooks(strategic, FoundationHooks(params, inception, tax_state))
+        return ComposedHooks(strategic, FoundationHooks(params, inception, tax_state,
+                                                        distributions))
     tax = tax_hooks_from_config(cfg)
     if tax is None:
         return strategic
@@ -638,7 +643,7 @@ def run_pre_tax(cfg: ResolvedConfig, inputs: EngineInputs, actual, tax) -> PreTa
                          "pre-tax path")
     if isinstance(tax, FoundationHooks):
         zero = tax.params.zero_rates()
-        fh = FoundationHooks(zero, tax.inception)
+        fh = FoundationHooks(zero, tax.inception, distributions=tax.distributions)
         result = run_engine(inputs, ComposedHooks(hooks_from_config(cfg), fh))
         cost = settle_foundation_shadow_costs(result.final_snapshot, zero, fh.state, tax.inception,
                                               inputs.targets, result.weeks[-1].effective_states)
@@ -647,7 +652,10 @@ def run_pre_tax(cfg: ResolvedConfig, inputs: EngineInputs, actual, tax) -> PreTa
                          "(dividend, RF, internal, distribution); setup and admin costs, "
                          "transaction costs and slippage kept; the final-year admin cost is paid "
                          "after the weekly path (TAX-006 waterfall, no full liquidation, no "
-                         "distribution tax)", cost)
+                         "distribution tax)"
+                         + ("; the same gross distribution schedule, untaxed: final wealth = "
+                            "remaining NAV + cumulative gross distributions (Q-037)"
+                            if zero.schedule_mode else ""), cost)
     shadow = ComposedHooks(hooks_from_config(cfg), IndividualTaxHooks(tax.params.zero_rates()))
     return PreTaxRun("shadow_zero_tax", run_engine(inputs, shadow), inputs,
                      "same EngineInputs object as the actual run (weeks, markets, signals, "
@@ -681,14 +689,47 @@ def prepare_run(cfg: ResolvedConfig, dividend_mode: Optional[str] = None,
                 assets: Optional[tuple] = None) -> PreparedRun:
     """Data preparation of a portfolio run: sources, calendar, EngineInputs and the CPI window
     of the retained range (REAL-001..004). ``dividend_mode``, ``warmup_params``,
-    ``auto_start`` and ``assets`` - see ``build_run``."""
+    ``auto_start`` and ``assets`` - see ``build_run``. A foundation distribution schedule
+    (Q-037) is loaded first and kept as an exogenous plan (no part of the market calendar)."""
+    check_supported_run(cfg)                        # configuration errors before any file
+    schedule = load_distribution_schedule(cfg) if needs_distribution_schedule(cfg) else None
     inputs, ctx = build_run(cfg, dividend_mode, warmup_params, auto_start, assets)
     report = ctx.pop("report")
     cpi, window = load_cpi_window(cfg, inception_date(ctx["first_week"]), inputs.weeks[-1], report)
     if cpi is not None:
         ctx["provenances"] += (cpi.provenance,)
+    if schedule is not None:
+        ctx["provenances"] += (schedule.provenance,)
     return PreparedRun(inputs=inputs, issues=tuple(report.issues), cpi_series=cpi,
-                       cpi_window=window, **ctx)
+                       cpi_window=window, distribution_schedule=schedule, **ctx)
+
+
+def needs_distribution_schedule(cfg: ResolvedConfig) -> bool:
+    """Q-037: a foundation profile (or a tax-compare with one) with
+    tax.foundation.tax_event=distribution_schedule."""
+    if cfg.get("tax.foundation.tax_event") != SCHEDULE:
+        return False
+    profiles = [cfg.get("tax.profile")]
+    if cfg.command == "tax-compare":
+        profiles += list(cfg.get("tax.compare_profiles") or ())
+    return any(p in FOUNDATION_PROFILES for p in profiles)
+
+
+def run_distributions(cfg: ResolvedConfig, prepared: PreparedRun, weeks, report) -> Optional[dict]:
+    """Q-037: the schedule rows of a run mapped to its retained weeks; rows outside the run are
+    ignored with a validation warning (they never extend the run range)."""
+    if cfg.get("tax.profile") not in FOUNDATION_PROFILES or not needs_distribution_schedule(cfg):
+        return None
+    by_week, ignored = map_distribution_schedule(prepared.distribution_schedule.rows, weeks)
+    report.extend(distribution_ignored_issues(ignored, weeks))
+    return by_week
+
+
+def distribution_ignored_issues(ignored, weeks) -> list:
+    return [ValidationIssue(Severity.WARNING, "distribution_row_ignored", "distribution_schedule",
+                            f"scheduled distribution row {r.row_index} ({r.scheduled_date}, nominal "
+                            f"week {r.nominal_week}) ignored: {reason} {weeks[0]}..{weeks[-1]}",
+                            r.nominal_week, "FND-009;Q-037") for r, reason in ignored]
 
 
 def prepared_input_sha256(prepared: PreparedRun, include_sources: bool = True) -> str:
@@ -725,6 +766,10 @@ def check_prepared_for(cfg: ResolvedConfig, prepared: PreparedRun) -> None:
     if need != "none" and need != prepared.dividend_mode:
         raise ConfigError(f"tax.profile={cfg.get('tax.profile')} needs dividend data "
                           f"({need}) but the prepared input carries {prepared.dividend_mode}")
+    if (cfg.get("tax.profile") in FOUNDATION_PROFILES and needs_distribution_schedule(cfg)
+            and prepared.distribution_schedule is None):
+        raise ConfigError("tax.foundation.tax_event=distribution_schedule but the prepared input "
+                          "carries no distribution schedule (Q-037)")
 
 
 def run_portfolio(cfg: ResolvedConfig, write: bool = True, hooks=None) -> PortfolioRunResult:
@@ -742,16 +787,18 @@ def run_prepared(cfg: ResolvedConfig, prepared: PreparedRun, write: bool = True,
     ctx = prepared.context()
     ctx["targets"] = inputs.targets
     inception = prepared.inception
-    hooks = hooks if hooks is not None else build_hooks(cfg, inception)
+    distributions = run_distributions(cfg, prepared, inputs.weeks, ctx["report"])
+    hooks = hooks if hooks is not None else build_hooks(cfg, inception, distributions=distributions)
     result = run_engine(inputs, hooks)
     ctx["report"].extend(result.issues)
     tax = find_tax_hooks(hooks)
     initial_capital = float(cfg.get("portfolio.initial_capital_pln"))
     # IND-016/IND-020, Q-032: terminal settlement on copies of the final state (never a weekly
     # record); tax.profile=none has no terminal settlement
-    if isinstance(tax, FoundationHooks):
-        terminal = settle_foundation_terminal(result.final_snapshot, tax.params, tax.state,
-                                              initial_capital, tax.inception)
+    if isinstance(tax, FoundationHooks):                   # FND-005: terminal | schedule end
+        terminal = settle_foundation(result.final_snapshot, tax.params, tax.state,
+                                     initial_capital, tax.inception, inputs.targets,
+                                     result.weeks[-1].effective_states)
     elif tax is not None:
         terminal = settle_terminal(result.final_snapshot, tax.params, tax.state)
     else:
@@ -777,6 +824,14 @@ def run_prepared(cfg: ResolvedConfig, prepared: PreparedRun, write: bool = True,
     if write:
         out.output_dir = write_portfolio_outputs(cfg, out, out_dir=out_dir, shared=shared)
     return out
+
+
+FOUNDATION_LIMITATIONS = [
+    "tax.foundation.internal_trading_tax_rate > 0 together with tax_event=distribution_schedule "
+    "is not defined by the clean-room specification adjudication (Q-037/Q-047): ConfigError",
+    "distribution_schedule: no terminal full distribution and no terminal distribution tax; "
+    "after_tax_terminal_wealth = remaining NAV after the final admin cost + cumulative net "
+    "scheduled distributions (Q-037)"]
 
 
 def write_portfolio_outputs(cfg: ResolvedConfig, res: PortfolioRunResult,
@@ -838,6 +893,9 @@ def write_portfolio_outputs(cfg: ResolvedConfig, res: PortfolioRunResult,
                                 "year still open); after_terminal = after terminal liquidation "
                                 "and final-year settlement"})
     if isinstance(res.tax_state, FoundationState):
+        if res.tax_params.schedule_mode:                                # Q-037 audit
+            write_csv(out / "distributions.csv", DISTRIBUTION_FIELDS,
+                      distribution_rows(t.final_tax_state.distribution_events))
         tax_doc["pre_tax_shadow_final_cost"] = {
             "final_admin_cost": res.pre_tax.terminal_cost.admin_cost.amount,
             "pre_cost_nav": res.pre_tax.terminal_cost.pre_cost_nav,
@@ -875,6 +933,11 @@ def write_portfolio_outputs(cfg: ResolvedConfig, res: PortfolioRunResult,
         **initial_state_manifest(cfg, res.report),
         "not_implemented_outputs": ["rolling_metrics.csv (MET-022/023, SHOULD)"],
     })
+    if isinstance(res.tax_state, FoundationState):
+        manifest["foundation_tax_event"] = res.tax_params.tax_event
+        manifest["foundation_limitations"] = FOUNDATION_LIMITATIONS
+        if res.tax_params.schedule_mode:
+            manifest["audit_outputs"].append("distributions.csv")
     if shared:
         manifest.update(shared["profile_manifest"])
     manifest.update(extra_manifest or {})

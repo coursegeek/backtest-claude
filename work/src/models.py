@@ -317,6 +317,33 @@ class RunCalendar:
     issues: tuple = ()
 
 
+@dataclass(frozen=True)
+class ScheduledDistribution:
+    """One row of a foundation distribution schedule (FND-009, Q-037): an exogenous plan known
+    in advance (not market data). Exactly one of ``amount`` (gross PLN) and ``percent_nav``
+    (decimal fraction of NAV_after_signal) is set. ``nominal_week`` / ``actual_week`` are filled
+    when the row is mapped onto a run calendar."""
+    row_index: int                  # 1-based data row of the file
+    scheduled_date: dt.date
+    amount: Optional[float] = None
+    percent_nav: Optional[float] = None
+    nominal_week: Optional[dt.date] = None
+    actual_week: Optional[dt.date] = None
+
+    @property
+    def kind(self) -> str:
+        return "amount" if self.amount is not None else "percent_nav"
+
+    def sort_key(self) -> tuple:
+        return (self.scheduled_date, self.row_index)
+
+
+@dataclass(frozen=True)
+class DistributionSchedule:
+    rows: tuple                     # ScheduledDistribution, file order
+    provenance: "Provenance"
+
+
 class TradeReason(str, Enum):
     """Reason codes of every trade (REP-004): signal, calendar/band rebalance, sell_to_pay,
     terminal_liquidation (individual_pl) and foundation_distribution_liquidation (foundation

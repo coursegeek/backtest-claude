@@ -50,7 +50,8 @@ class DueCursor:
         return paid_total
 
 
-def sell_to_pay(pf, ctx: WeekContext, due: AmountsDue, step=3, phase: str = "weekly") -> None:
+def sell_to_pay(pf, ctx: WeekContext, due: AmountsDue, step=3, phase: str = "weekly",
+                reason=None) -> None:
     """TAX-006 without a strategic trigger, in this exact order:
       (A) rf_base, no cost;
       (B) RF reserves pro rata to their current values, no cost;
@@ -58,8 +59,12 @@ def sell_to_pay(pf, ctx: WeekContext, due: AmountsDue, step=3, phase: str = "wee
           sale with costs, cost-basis update and realization, reason sell_to_pay;
       (D) insolvency error when the net liquidation value cannot cover the amount.
     Signal states are never changed. ``step``/``phase`` mark the trades and payments (weekly
-    step 3 by default; the pre-tax foundation cost settlement uses phase 'terminal')."""
+    step 3 by default; the pre-tax foundation cost settlement uses phase 'terminal').
+    ``reason`` - the TradeReason of the step-C sales: the caller's, else ``due.sale_reason``
+    (scheduled foundation distributions: foundation_distribution_liquidation), else
+    sell_to_pay."""
     week = ctx.week
+    reason = reason or due.sale_reason or TradeReason.SELL_TO_PAY
     cursor = DueCursor(pf, week, due, step, phase)
     if not cursor.items:
         return
@@ -89,6 +94,6 @@ def sell_to_pay(pf, ctx: WeekContext, due: AmountsDue, step=3, phase: str = "wee
         for a in assets:
             if a in values:
                 g = values[a] if gross >= v_tot else gross * values[a] / v_tot
-                pf.sell(week, a, g, TradeReason.SELL_TO_PAY, RF_BASE, step=step, phase=phase)
+                pf.sell(week, a, g, reason, RF_BASE, step=step, phase=phase)
         raised = pf.ledger.rf_base - cash_before
         cursor.pay(RF_BASE, min(left, raised), "sell_to_pay:C_risky_assets_pro_rata")

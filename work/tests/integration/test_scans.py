@@ -441,5 +441,5 @@ def test_cli_scan_errors(tmp_path):
     assert r.returncode == 2 and "ALLOC-001" in r.stderr
     r = cli("delay-scan", "--asset", "stocks", "--tax-profile", "family_foundation_15",
             "--foundation-tax-event", "distribution_schedule", "--output-dir", str(tmp_path))
-    assert r.returncode == 3 and "Q-037" in r.stderr
+    assert r.returncode == 2 and "Q-037" in r.stderr and "distribution_file" in r.stderr
     assert not any(tmp_path.iterdir())

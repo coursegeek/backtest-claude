@@ -184,10 +184,11 @@ Symulacja pre-tax (Q-015) to drugi przebieg tej samej funkcji `step` z podatkami
   (IND-001/019) i loss buckets 5 lat oldest-first z `loss_offset_fraction` (IND-010/013, Q-030),
   danina 4% ponad 1 mln PLN od CG netto + external base (IND-002..005/018),
   należność za Y w kroku 2 pierwszego tygodnia Y+1 (IND-006, Q-029).
-* `family_foundation_15/19`: dywidendy 15% (FND-001), internal trading tax (default 0, Q-047),
-  RF rate (default 0, FND-013), setup cost przed alokacją (FND-015/016), admin cost 40 000 PLN
-  za rok z proration (FND-010..012, Q-034), podatek od dystrybucji terminalnie (FND-003..007,
-  Q-032); `distribution_schedule` do decyzji (Q-037).
+* `family_foundation_15/19`: dywidendy 15% (FND-001), internal trading tax (default 0; > 0 rocznie
+  bez carry-forward, Q-047), RF rate (default 0, FND-013), setup cost przed alokacją
+  (FND-015/016), admin cost 40 000 PLN za rok z proration (FND-010..012, Q-034), podatek od
+  dystrybucji terminalnie (FND-003..007, Q-032) albo przy każdej wypłacie z harmonogramu
+  `distribution_schedule` (FND-005/009, Q-037; zrealizowane w sesji 14).
 * `none`: brak podatków, brak kosztów fundacji.
 * Każde zdarzenie: `date, event_type, asset, tax_base, rate, tax_due, category, settlement,
   period, dividend_status` (TAX-004, REP-015, DIV-011, Q-035).
@@ -269,7 +270,9 @@ cała historia, luka przerywa liczniki, polityki tylko dla brakującego źródł
 runu), Q-020 (brak skracania okna treningowego), Q-022 (walk-forward: niezależny TRAIN, ciągły
 OOS, sekcja 12), Q-011 (historia akcji od 1920-01-02), Q-013 (ścisły warm-up, jedyny fallback
 RISK_ON), Q-024 (CLI-007 bez wag = ALLOC-001), Q-025 (start bez --start po warm-upie, klucze
---data-file), Q-038 (komenda signals). DATA BLOCKER (bez wpływu na implementację, tylko
+--data-file), Q-038 (komenda signals), Q-047 (roczny internal trading tax fundacji bez
+carry-forward), Q-037 (distribution_schedule: wypłaty brutto, podatek potrącany z wypłaty,
+kumulatywna baza gain_only, koniec bez likwidacji). DATA BLOCKER (bez wpływu na implementację, tylko
 na PASS wymagań o danych kanonicznych): Q-002 złoto LBMA, Q-004 provenance splice akcji, Q-008
 schemat dywidend. Pozostałe pytania MAJOR/MINOR są implementowane wg `proposed_interpretation`
 za przełącznikami configu i opisane w `IMPLEMENTATION_NOTES.md`.

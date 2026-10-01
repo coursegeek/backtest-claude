@@ -115,6 +115,10 @@ REALIZATION_FIELDS = ["week_key", "tax_year", "asset", "units_sold", "proceeds_n
 TERMINAL_TRADE_REASON = "terminal_liquidation"
 DIVIDEND_FIELDS = ["week_key", "asset", "value_before_returns", "dividend_return", "gross_dividend",
                    "dividend_tax", "net_reinvested", "units", "unit_price", "lot_id", "pipeline_step"]
+# Q-037: one row per scheduled foundation distribution actually paid (gross = tax + net)
+DISTRIBUTION_FIELDS = ["row_index", "scheduled_date", "nominal_week", "actual_week", "paid_week",
+                       "kind", "value", "nav_base", "gross", "tax_base_mode", "tax_base", "rate",
+                       "tax", "net", "basis_before", "basis_after"]
 
 
 def tax_event_rows(events) -> list:
@@ -155,6 +159,10 @@ def terminal_settlement_doc(t) -> dict:
     return doc
 
 
+def distribution_rows(events) -> list:
+    return [{k: getattr(e, k) for k in DISTRIBUTION_FIELDS} for e in events]
+
+
 def dividend_rows(records) -> list:
     return [{k: getattr(r, k) for k in DIVIDEND_FIELDS} for r in records]
 
@@ -170,8 +178,15 @@ def weekly_tax_amounts(week_record, tax_events) -> dict:
     rf = math.fsum(e.amount for e in tax_events
                    if e.week_key == week_record.week_key and e.event_type == "rf_interest_tax")
     costs = math.fsum(p.amount for p in week_record.payments if event_category(p.event_type) == "cost")
+    # Q-037: a scheduled gross distribution leaves the NAV once, as tax + net payout
+    dist_tax = math.fsum(p.amount for p in week_record.payments
+                         if p.event_type == "foundation_distribution_tax")
+    dist_net = math.fsum(p.amount for p in week_record.payments
+                         if p.event_type == "foundation_distribution_net")
     return {"annual_tax_paid": annual, "dividend_tax": div, "rf_interest_tax": rf,
-            "taxes_paid": math.fsum([annual, div, rf]), "costs_paid": costs}
+            "taxes_paid": math.fsum([annual, div, rf]), "costs_paid": costs,
+            "gross_distributions_paid": math.fsum([dist_tax, dist_net]),
+            "net_distributions_paid": dist_net, "distribution_tax_paid": dist_tax}
 
 
 def record_rows(records, fields) -> list:
@@ -203,7 +218,8 @@ def weekly_portfolio_fields(assets) -> list:
             + ["dividend_return", "gross_dividend", "dividend_reinvested"]
             + ["trades", "traded_value", "transaction_costs", "slippage", "amounts_due",
                "payments", "rebalance", "annual_tax_paid", "dividend_tax", "rf_interest_tax",
-               "taxes_paid", "costs_paid"] + [f"state_{a}" for a in assets])
+               "taxes_paid", "costs_paid", "gross_distributions_paid", "net_distributions_paid",
+               "distribution_tax_paid"] + [f"state_{a}" for a in assets])
 
 
 def weekly_portfolio_rows(result, targets, assets, tax_events=(), targets_by_week=None) -> list:
@@ -301,11 +317,14 @@ SUMMARY_FIELDS = (
        "total_tax_paid", "dividend_tax_paid", "rf_interest_tax_paid", "capital_gains_tax_paid",
        "solidarity_tax_paid", "internal_trading_tax_paid", "foundation_distribution_tax_paid",
        "foundation_setup_cost_paid", "foundation_admin_cost_paid", "foundation_admin_cost_weekly",
-       "foundation_admin_cost_terminal", "distributed_amount", "distribution_tax_base_mode",
+       "foundation_admin_cost_terminal", "foundation_gross_distributions_paid",
+       "foundation_net_distributions_paid", "distribution_capital_basis_remaining",
+       "distributed_amount", "distribution_tax_base_mode",
        "distribution_tax_base", "pre_tax_final_admin_cost", "pre_tax_terminal_trading_costs",
        "terminal_trade_count", "terminal_traded_value", "terminal_transaction_costs",
        "terminal_slippage", "terminal_liquidation_costs", "terminal_capital_gains_tax",
-       "terminal_solidarity_tax", "terminal_foundation_tax", "terminal_tax_total",
+       "terminal_solidarity_tax", "terminal_internal_trading_tax", "terminal_foundation_tax",
+       "terminal_tax_total",
        "transaction_cost_bps", "slippage_bps", "rebalance_mode", "rebalance_band_pp",
        "sortino_mar_annual",
        "cpi_label", "real_return_warning", "cpi_start_month", "cpi_end_month", "cpi_start",
@@ -394,8 +413,12 @@ def summary_row(cfg, res) -> dict:
     for k in ("total_tax_paid", "dividend_tax_paid", "rf_interest_tax_paid", "capital_gains_tax_paid",
               "solidarity_tax_paid", "internal_trading_tax_paid", "foundation_distribution_tax_paid",
               "foundation_setup_cost_paid", "foundation_admin_cost_paid", "foundation_admin_cost_weekly",
-              "foundation_admin_cost_terminal"):
+              "foundation_admin_cost_terminal", "foundation_gross_distributions_paid",
+              "foundation_net_distributions_paid"):
         row[k] = totals.get(k, 0.0)
+    # Q-037: remaining capital basis of the gain_only distribution base (schedule mode only)
+    row["distribution_capital_basis_remaining"] = (
+        getattr(t.final_tax_state, "distribution_capital_basis_remaining", None) if t else None)
     row.update({
         "distributed_amount": getattr(t, "distributed_amount", None),
         "distribution_tax_base_mode": getattr(t, "distribution_tax_base_mode", None),
@@ -408,6 +431,7 @@ def summary_row(cfg, res) -> dict:
         "terminal_liquidation_costs": t.terminal_trading_costs if t else 0.0,
         "terminal_capital_gains_tax": t.terminal_capital_gains_tax if t else 0.0,
         "terminal_solidarity_tax": t.terminal_solidarity_tax if t else 0.0,
+        "terminal_internal_trading_tax": getattr(t, "terminal_internal_trading_tax", 0.0) if t else 0.0,
         "terminal_foundation_tax": getattr(t, "terminal_foundation_tax", 0.0) if t else 0.0,
         "terminal_tax_total": t.terminal_tax_total if t else 0.0,
         "transaction_cost_bps": float(cfg.get("portfolio.transaction_cost_bps")),

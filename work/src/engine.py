@@ -33,6 +33,7 @@ while keeping its nominal week in the audit trail.
 """
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import math
 from dataclasses import dataclass, field
@@ -90,9 +91,13 @@ class EngineInputs:
 
 @dataclass(frozen=True)
 class AmountsDue:
-    """Cash that must actually be paid in the week (Q-046); items are (event_type, amount)."""
+    """Cash that must actually be paid in the week (Q-046); items are (event_type, amount).
+    ``sale_reason`` (optional): the TradeReason of risky-asset sales the sell_to_pay waterfall
+    makes to fund these items (default sell_to_pay; scheduled foundation distributions use
+    foundation_distribution_liquidation, Q-037)."""
     total: float = 0.0
     items: tuple = ()
+    sale_reason: Optional[object] = None
 
     def normalized_items(self) -> tuple:
         if self.total < 0:
@@ -328,6 +333,17 @@ class WorkingPortfolio:
         self.payments.append(p)
         return p
 
+    def split_payment(self, index: int, parts) -> None:
+        """Replace payments[index] by records of the same outflow split into (event_type,
+        amount) parts (audit only - the ledger is not touched again); the parts sum to the
+        original amount (Q-037: a gross distribution = distribution tax + net payout)."""
+        p = self.payments[index]
+        parts = [(t, a) for t, a in parts if a > 0]
+        if abs(math.fsum(a for _, a in parts) - p.amount) > 1e-9 * max(1.0, p.amount):
+            raise ValueError(f"split of payment {p.amount!r} does not add up: {parts}")
+        self.payments[index:index + 1] = [dataclasses.replace(p, event_type=t, amount=a)
+                                          for t, a in parts]
+
     def transfer(self, week, source, destination, amount, reason, step=3,
                  phase="weekly") -> Optional[RfTransfer]:
         """Cost-free book transfer between RF components (Q-017)."""
@@ -453,10 +469,16 @@ class ComposedHooks(PipelineHooks):
         return capital
 
     def amounts_due(self, ctx, portfolio) -> AmountsDue:
-        items = []
+        items, reasons = [], []
         for e in self.extensions:
-            items += list(e.amounts_due(ctx, portfolio).normalized_items())
-        return AmountsDue(math.fsum(a for _, a in items), tuple(items)) if items else AmountsDue()
+            due = e.amounts_due(ctx, portfolio)
+            items += list(due.normalized_items())
+            if due.sale_reason is not None:
+                reasons.append(due.sale_reason)
+        if not items:
+            return AmountsDue()
+        return AmountsDue(math.fsum(a for _, a in items), tuple(items),
+                          reasons[0] if reasons else None)
 
     def rebalance_or_fund(self, ctx, portfolio, due: AmountsDue) -> None:
         self.funding.rebalance_or_fund(ctx, portfolio, due)
@@ -614,8 +636,11 @@ class Engine:
             snap(6)
             end = pf.ledger
             rebal = pf.rebalance_events[marks[3]:]
+            # an empty portfolio (every unit distributed by a foundation schedule, Q-037) has
+            # no return
+            ret = end.nav / start.nav - 1.0 if start.nav > 0 else 0.0
             weeks.append(WeekRecord(
-                week, start, after_signal, before_returns, end, end.nav / start.nav - 1.0,
+                week, start, after_signal, before_returns, end, ret,
                 market, tuple(pf.trades[marks[0]:]), tuple(pf.payments[marks[1]:]),
                 tuple(pf.transfers[marks[2]:]), rebal[-1] if rebal else None, due,
                 {a: trackers[a].effective_state for a in self.assets},

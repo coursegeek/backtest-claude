@@ -207,9 +207,9 @@ def test_distribution_tax_by_profile():
 
 
 def test_internal_trading_tax_zero():
-    """TEST-015 / FND-002 (default 0), Q-047: realized gains of signal trades, rebalances and
-    sell_to_pay sales are audited per Friday year but create no internal trading tax; a
-    non-zero rate is refused (Q-047 open), never silently treated as 0."""
+    """TEST-015 / FND-002 (default 0): realized gains of signal trades, rebalances and
+    sell_to_pay sales are audited per Friday year but create no internal trading tax and no
+    internal-tax event (the non-zero rate: test_internal_trading_tax_nonzero, Q-047)."""
     from fixtures.builders import annual_tax_inputs
     inp = annual_tax_inputs()
     for mode in ("signal-only", "annually"):
@@ -225,5 +225,124 @@ def test_internal_trading_tax_zero():
         assert fh.state.internal_trading_tax_paid == 0.0
         assert {e.event_type for e in fh.state.tax_events} <= {
             "foundation_setup_cost", "foundation_annual_admin_cost", "dividend_tax", "rf_interest_tax"}
-    with pytest.raises(NotImplementedCommand, match="Q-047"):
-        FoundationParams("family_foundation_15", internal_trading_tax_rate=0.05)
+        assert fh.state.internal_tax_by_year == {} and fh.state.closed_internal_tax_years == []
+
+
+# ============================================================================ Q-047
+def loss_year_inputs():
+    """Stocks 70 / gold 30 from 2000-02-04: 2000 - a stocks exit at -50 % (loss) and a gold exit
+    after +30 % (gain) in the same year (net loss); 2001 - a stocks exit after a strong rise
+    (gain)."""
+    from src.costs import CostModel
+    k0 = D("2000-01-07")
+    n = (D("2002-01-18") - k0).days // 7 + 1
+
+    def path(points):
+        out, v = [], None
+        for i in range(n):
+            day = k0 + dt.timedelta(days=7 * i)
+            for d0, val in points:
+                if day >= D(d0):
+                    v = val
+            out.append(v)
+        return out
+    stocks = path([("2000-01-07", 100.0), ("2000-06-02", 50.0), ("2000-09-01", 60.0),
+                   ("2001-03-02", 200.0), ("2001-06-01", 190.0), ("2001-09-07", 210.0)])
+    gold = path([("2000-01-07", 100.0), ("2000-04-07", 130.0), ("2000-07-07", 125.0)])
+    rets = {a: [p[i] / p[i - 1] - 1 for i in range(4, n)] for a, p in (("stocks", stocks), ("gold", gold))}
+    return engine_inputs({"stocks": stocks, "gold": gold}, first=4,
+                         targets={"stocks": 0.7, "gold": 0.3}, returns=rets,
+                         params={"stocks": params_for("stocks"), "gold": params_for("gold")},
+                         costs=CostModel(10.0, 5.0))
+
+
+def test_internal_trading_tax_nonzero():
+    """TEST-015 extension / FND-002 / Q-047 with internal_trading_tax_rate = 0.10, computed by
+    hand: (a) 2000 - one stocks exit realises 672 000 * (1 - 0.0015) - 336 000 = 334 992 ->
+    tax 33 499.20, determined in step 2 of 2001-01-05 (first retained week of 2001) and paid in
+    step 3 by sell_to_pay; the funding sales of 2001-01-05 are 2001 realizations and do not
+    change the 2000 liability (IND-006 analogue). (b) 2000 - a stocks loss of
+    168 000 * 0.9985 - 336 000 = -168 252 and a gold gain of 180 000 * 0.9985 - 144 000 =
+    +35 730 net to -132 522 -> an audit event with tax 0; 2001 is taxed in full (no carry-
+    forward of the 2000 loss, no loss buckets, no solidarity tax)."""
+    from fixtures.builders import annual_tax_inputs
+    from src.foundation import INTERNAL_TAX
+    inp = annual_tax_inputs()
+    hooks, fh = foundation_hooks(inp, internal_trading_tax_rate=0.10)
+    res = run_engine(inp, hooks)
+    st = fh.state
+    gain_2000 = 672_000.0 * (1 - 0.0015) - 336_000.0
+    assert [round(g, 6) for _, g, _ in st.realizations[2000]] == [round(gain_2000, 6)]
+    l00 = st.internal_tax_by_year[2000]
+    assert (l00.annual_realized, l00.taxable_gain) == pytest.approx((334_992.0, 334_992.0), abs=1e-6)
+    assert l00.tax == pytest.approx(33_499.2, abs=1e-6) and l00.rate == 0.10
+    assert (l00.determined_week, l00.paid_week, l00.settlement) == (D("2001-01-05"), D("2001-01-05"),
+                                                                     "annual")
+    ev = [e for e in st.tax_events if e.event_type == INTERNAL_TAX and e.tax_year == 2000]
+    assert len(ev) == 1 and (ev[0].category, ev[0].settlement, ev[0].pipeline_step, ev[0].week_key,
+                             ev[0].phase) == ("tax", "annual", 2, D("2001-01-05"), "weekly")
+    w = next(x for x in res.weeks if x.week_key == D("2001-01-05"))
+    assert [i for i in w.amounts_due.items if i[0] == INTERNAL_TAX] == [(INTERNAL_TAX, l00.tax)]
+    paid = [p for p in w.payments if p.event_type == INTERNAL_TAX]
+    assert math.fsum(p.amount for p in paid) == pytest.approx(l00.tax) and {p.pipeline_step for p in paid} == {3}
+    sales = [t for t in w.trades if t.reason == TradeReason.SELL_TO_PAY]
+    assert sales                                         # rf_base and reserves are empty
+    funding = [(a, g) for a, g, k in st.realizations[2001] if k == D("2001-01-05")]
+    assert sorted(funding) == sorted((t.asset, t.realized_gain) for t in sales)
+    l01 = st.internal_tax_by_year[2001]
+    assert l01.annual_realized == math.fsum(g for _, g, _ in st.realizations[2001])
+    assert l01.tax == pytest.approx(0.10 * l01.annual_realized)
+    assert st.internal_trading_tax_paid == pytest.approx(l00.tax + l01.tax)
+    assert st.closed_internal_tax_years == [2000, 2001]
+    # (b) a net loss year: tax 0, no carry-forward
+    inp = loss_year_inputs()
+    hooks, fh = foundation_hooks(inp, internal_trading_tax_rate=0.10)
+    run_engine(inp, hooks)
+    st = fh.state
+    assert sorted(round(g, 6) for _, g, _ in st.realizations[2000]) == [-168_252.0, 35_730.0]
+    l00, l01 = st.internal_tax_by_year[2000], st.internal_tax_by_year[2001]
+    assert l00.annual_realized == pytest.approx(-132_522.0) and (l00.taxable_gain, l00.tax) == (0.0, 0.0)
+    zero = [e for e in st.tax_events if e.event_type == INTERNAL_TAX and e.tax_year == 2000]
+    assert len(zero) == 1 and zero[0].amount == 0.0 and zero[0].week_key == D("2001-01-05")
+    assert l01.annual_realized > 0 and l01.tax == pytest.approx(0.10 * l01.annual_realized)
+    assert l01.tax != pytest.approx(0.10 * (l01.annual_realized - 132_522.0))    # no carry
+    assert not hasattr(st, "loss_buckets")
+    # the default rate 0 creates no internal-tax events and pays nothing (TEST-015)
+    hooks, fh = foundation_hooks(loss_year_inputs())
+    run_engine(loss_year_inputs(), hooks)
+    assert fh.state.internal_tax_by_year == {} and fh.state.internal_trading_tax_paid == 0.0
+
+
+def test_internal_trading_tax_final_year_terminal():
+    """Q-047 terminal mode: the terminal liquidation gains belong to the final year; the final
+    internal trading tax is closed after the liquidation and paid before the final admin cost,
+    and both are deducted before distributed_amount (and so before the distribution tax)."""
+    from fixtures.builders import annual_tax_inputs
+    from src.foundation import ADMIN_COST, DISTRIBUTION_TAX, INTERNAL_TAX
+    inp = annual_tax_inputs()
+    hooks, fh = foundation_hooks(inp, internal_trading_tax_rate=0.10)
+    res = run_engine(inp, hooks)
+    t = settle_foundation_terminal(res.final_snapshot, fh.params, fh.state, 1_000_000.0, fh.inception)
+    final = t.final_tax_state
+    weekly_2002 = math.fsum(g for _, g, k in fh.state.realizations[2002])
+    terminal_gain = math.fsum(r.realized_gain for r in t.terminal_realizations)
+    liab = final.internal_tax_by_year[2002]
+    assert liab.settlement == "terminal" and liab.annual_realized == pytest.approx(weekly_2002 + terminal_gain)
+    assert t.terminal_internal_trading_tax == pytest.approx(0.10 * (weekly_2002 + terminal_gain))
+    ev = [e for e in t.terminal_tax_events if e.event_type == INTERNAL_TAX]
+    assert len(ev) == 1 and (ev[0].settlement, ev[0].phase, ev[0].pipeline_step) == ("terminal", "terminal", None)
+    assert [p.event_type for p in t.terminal_payments] == [INTERNAL_TAX, ADMIN_COST, DISTRIBUTION_TAX]
+    assert t.distributed_amount == pytest.approx(
+        t.nav_after_liquidation - t.terminal_internal_trading_tax - t.final_admin_cost.amount)
+    assert t.distribution_tax_base == t.distributed_amount
+    assert t.terminal_foundation_tax == pytest.approx(t.terminal_internal_trading_tax + t.distribution_tax)
+    assert final.total_tax_paid() == pytest.approx(math.fsum(
+        e.amount for e in final.tax_events if e.category == "tax"), rel=1e-12)       # TEST-024
+    assert t.after_tax_terminal_wealth == pytest.approx(t.distributed_amount - t.distribution_tax)
+    # pre-tax shadow: rate 0, no internal tax at all (FoundationParams.zero_rates)
+    zero = fh.params.zero_rates()
+    assert zero.internal_trading_tax_rate == 0.0 and not zero.internal_tax_active
+    hooks0, fh0 = foundation_hooks(inp, internal_trading_tax_rate=0.0, dividend_rate=0.0,
+                                   distribution_rate=0.0)
+    run_engine(inp, hooks0)
+    assert not [e for e in fh0.state.tax_events if e.event_type == INTERNAL_TAX]

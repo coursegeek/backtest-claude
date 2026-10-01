@@ -35,7 +35,7 @@ Core engine nie został napisany; powstały wyłącznie narzędzia audytowe, rap
 | MINOR | 23 (+ Q-050, Q-051, Q-052) |
 | MUST zmapowane bez blokera (`MAPPED`) | 340 w audycie → 347 po adjudykacji |
 | MUST zablokowane decyzją (`BLOCKED`) | 12 w audycie → 5 po adjudykacji (tylko DATA BLOCKER) |
-| MUST `PASS` | 0 w audycie; 139 po sesji 2; 165 po sesji 3; 177 po sesji 4; 217 po sesji 5; 225 po sesji 6; 262 po sesji 7; 287 po sesji 8; 290 po sesji 9; 304 po sesji 10; 318 po sesji 11; 339 po sesji 12; 345 po sesji 13 (sekcja 13) |
+| MUST `PASS` | 0 w audycie; 139 po sesji 2; 165 po sesji 3; 177 po sesji 4; 217 po sesji 5; 225 po sesji 6; 262 po sesji 7; 287 po sesji 8; 290 po sesji 9; 304 po sesji 10; 318 po sesji 11; 339 po sesji 12; 345 po sesji 13; 347 po sesji 14 (sekcja 13) |
 | SHOULD proponowane do odroczenia | 1 (ERR-007 cache) |
 | Kontrole danych | 58: 27 PASS, 12 FAIL, 14 WARN, 5 INFO |
 | Scenariusze AB + przykłady CLI | 20: 10 wykonalnych, 10 wymaga decyzji |
@@ -199,7 +199,7 @@ Repozytorium jest gotowe do rozpoczęcia implementacji warstw niezależnych od b
 6 blokerów; do tego czasu odpowiadające im wiersze pozostają `BLOCKED`, a V2 będzie emitować
 jawne ostrzeżenia lub czytelne błędy zamiast cichych założeń.
 
-## 12. Adjudykacje użytkownika (sesje 2–13)
+## 12. Adjudykacje użytkownika (sesje 2–14)
 
 | Pytanie | Status | Skutek |
 |---|---|---|
@@ -215,6 +215,8 @@ jawne ostrzeżenia lub czytelne błędy zamiast cichych założeń.
 | Q-024 CLI-007 (sesja 13) | RESOLVED | Literalny przykład bez wag → ALLOC-001; wariant z `--weights stocks=1.0` testuje override pliku (ścieżka i SHA w manifeście). |
 | Q-025 start i `--data-file` (sesja 13) | RESOLVED | Bez `--start`: najwcześniejszy tydzień wspólnego zakresu z pełnym warm-upem; wspólna luka raportowana i pomijana (Q-012), nie missing.return_policy; klucze stocks_price/stocks_return/gold/btc/dividend/cpi (+_file), nieznany lub zdublowany → ConfigError; override w config_resolved i manifeście. |
 | Q-038 signal-only (sesja 13) | RESOLVED | Komenda `signals` = oficjalna analiza signal-only (bez portfela, bez serii zwrotów, signals.csv + audyt); inne znaczenie niż `--rebalance signal-only`. |
+| Q-047 internal trading tax fundacji (sesja 14) | RESOLVED | Stawka > 0: roczny netting realizacji stocks/gold/BTC, podstawa max(0, netto), bez carry-forward; ustalenie w kroku 2 pierwszego tygodnia Y+1, płatność w kroku 3; sprzedaże finansujące należą do Y+1; rok finalny po likwidacji, przed kosztem admin i distributed_amount; shadow ze stawką 0; stawka 0 bez zdarzeń. |
+| Q-037 distribution_schedule (sesja 14) | RESOLVED | Plik date,amount / date,percent_nav (wymagany, walidowany); wypłata brutto D zdejmowana z NAV w kroku 2/3 (TAX-007 / TAX-006 z foundation_distribution_liquidation), podatek T potrącany z D, netto D - T; percent_nav od NAV_after_signal; gain_only na kumulatywnej bazie kapitału; bez terminalnej likwidacji i podatku w trybie schedule; after-tax wealth = pozostały NAV + wypłaty netto, pre-tax = NAV shadow + wypłaty brutto; walk-forward wypłaca każdy wiersz raz; kombinacja z internal tax > 0 → ConfigError. |
 | Q-017 koszty i RF (sesja 3) | RESOLVED | RF = ledger gotówkowy; koszty/slippage tylko na kupnie/sprzedaży stocks/gold/btc; sprzedaż `net = traded*(1-tc-slip)`, zakup z gotówki `traded = C/(1+tc+slip)`; początkowa alokacja nie jest transakcją. |
 | Q-019 stan początkowy (sesja 3) | RESOLVED | Stan potwierdzony ≠ efektywny; split z efektywnego; wykonania ≥ start pozostają pending i są transakcjami w backteście. |
 | Q-049 tożsamość NAV (sesja 3) | RESOLVED | `abs(NAV - sum(components)) / max(1, abs(NAV)) <= 1e-10`; NAV z komponentów przez `math.fsum`. |
@@ -355,11 +357,19 @@ Wiersze MUST nadal `BLOCKED` (dane niekanoniczne): SEM-001, SEM-003, SCHEMA-005,
   RESOLVED. Regresja: 24 komendy (runy, S02-S06, S08, scany, optimize, walk-forward, signals,
   runy od 1926 i bez startu) bez różnic poza nowymi kolumnami/kluczami raportu.
 
-Stan macierzy: MUST — 345 `PASS`, 2 `IN_PROGRESS` (FND-002/Q-047, FND-005/Q-037), 0 `MAPPED`,
-5 `BLOCKED` (DATA BLOCKER), 0 `FAIL`; SHOULD — 20 `PASS`. Testy: `python -m pytest work`
-(wszystkie przechodzą). Żaden wiersz zablokowany przez Q-002/Q-004/Q-008 nie został oznaczony
-`PASS` na podstawie staged plików; dowody dla LBMA, segmentów SEM-001 i kanonicznego SCHEMA-005
-pochodzą z syntetycznych fixture'ów.
+* Sesja 14 (ostatnie MUST `IN_PROGRESS`): niezerowy internal trading tax fundacji (Q-047:
+  roczny, bez carry-forward, rok finalny w terminal settlement przed kosztem admin i
+  dystrybucją) oraz `tax.foundation.tax_event=distribution_schedule` (Q-037: plik harmonogramu
+  z proweniencją, wypłaty brutto w kroku 2/3 z podziałem na podatek i wypłatę netto,
+  `distributions.csv`, kumulatywna baza gain_only, koniec bez likwidacji, walk-forward bez
+  duplikatów). FND-002, FND-005 i FND-009 PASS; Q-037, Q-047 RESOLVED. Regresja: 24 komendy
+  bez różnic w wynikach (tylko nowe pola 0/puste).
+
+Stan macierzy: MUST — 347 `PASS`, 0 `IN_PROGRESS`, 0 `MAPPED`, 5 `BLOCKED` (DATA BLOCKER:
+SEM-001, SEM-003, SCHEMA-005, SEM-007, TEST-038), 0 `FAIL`; SHOULD — 21 `PASS`. Testy:
+`python -m pytest work` (wszystkie przechodzą). Żaden wiersz zablokowany przez Q-002/Q-004/Q-008
+nie został oznaczony `PASS` na podstawie staged plików; dowody dla LBMA, segmentów SEM-001 i
+kanonicznego SCHEMA-005 pochodzą z syntetycznych fixture'ów.
 
 <!-- AUDIT_COUNTS
 requirements_total=379
@@ -371,7 +381,7 @@ major=20
 minor=26
 must_mapped=0
 must_blocked=5
-must_pass=345
+must_pass=347
 should_proposed_deferral=1
 input_checks=58
 checks_fail=12
@@ -383,9 +393,9 @@ scenarios_feasible=10
 scenarios_needs_decision=10
 blocker_ids=Q-002,Q-004,Q-005,Q-008,Q-012,Q-020
 data_blocker_ids=Q-002,Q-004,Q-008
-resolved_ids=Q-005,Q-006,Q-011,Q-012,Q-013,Q-014,Q-015,Q-016,Q-017,Q-018,Q-019,Q-020,Q-022,Q-023,Q-024,Q-025,Q-026,Q-027,Q-029,Q-030,Q-032,Q-033,Q-034,Q-035,Q-038,Q-039,Q-040,Q-041,Q-045,Q-046,Q-049,Q-050,Q-051,Q-052
-open_questions=15
+resolved_ids=Q-005,Q-006,Q-011,Q-012,Q-013,Q-014,Q-015,Q-016,Q-017,Q-018,Q-019,Q-020,Q-022,Q-023,Q-024,Q-025,Q-026,Q-027,Q-029,Q-030,Q-032,Q-033,Q-034,Q-035,Q-037,Q-038,Q-039,Q-040,Q-041,Q-045,Q-046,Q-047,Q-049,Q-050,Q-051,Q-052
+open_questions=13
 must_fail=0
-must_in_progress=2
-should_pass=20
+must_in_progress=0
+should_pass=21
 -->

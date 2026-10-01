@@ -12,7 +12,7 @@ import pytest
 
 from src.app import run_portfolio
 from src.config import ResolvedConfig
-from src.errors import NotImplementedCommand, WarmupError
+from src.errors import ConfigError, NotImplementedCommand, WarmupError
 
 WORK = Path(__file__).resolve().parents[2]
 S07 = {"allocation": {"targets": "stocks=0.6,gold=0.2,btc=0.2"},
@@ -116,13 +116,18 @@ def test_run_costs_reduce_nav_monotonically():
     assert costly.weeks[-1].nav_end < free.weeks[-1].nav_end
 
 
-@pytest.mark.parametrize("extra", [
-    {"tax": {"profile": "family_foundation_15", "foundation": {"tax_event": "distribution_schedule"}}},
-    {"tax": {"profile": "family_foundation_19", "foundation": {"internal_trading_tax_rate": 0.1}}},
-    {"tax": {"profile": "family_foundation_19", "foundation": {"tax_event": "distribution_schedule"}},
-     "portfolio": {"rebalance": "band", "rebalance_band_pp": 1}}])
-def test_unsupported_modes_are_refused(extra):
-    with pytest.raises(NotImplementedCommand):
+@pytest.mark.parametrize("extra,msg", [
+    ({"tax": {"profile": "family_foundation_15", "foundation": {"tax_event": "distribution_schedule"}}},
+     "requires tax.foundation.distribution_file"),
+    ({"tax": {"profile": "family_foundation_19", "foundation": {
+        "tax_event": "distribution_schedule", "internal_trading_tax_rate": 0.1,
+        "distribution_file": "x.csv"}}}, "not defined by clean-room specification adjudication"),
+    ({"tax": {"profile": "family_foundation_19", "foundation": {"tax_event": "annual"}},
+      "portfolio": {"rebalance": "band", "rebalance_band_pp": 1}}, "tax_event")])
+def test_invalid_foundation_modes_are_refused(extra, msg):
+    """Q-037 / Q-047: a schedule without its file, the undefined schedule + non-zero internal
+    trading tax combination and an unknown tax_event are ConfigErrors (no fallback)."""
+    with pytest.raises(ConfigError, match=msg):
         run_portfolio(cfg(extra), write=False)
 
 
@@ -142,8 +147,7 @@ def test_run_cli_exit_codes(tmp_path):
     assert ok.returncode == 0, ok.stderr
     taxed = subprocess.run(base + ["--tax-profile", "family_foundation_15", "--foundation-tax-event",
                                    "distribution_schedule"], capture_output=True, text=True)
-    assert taxed.returncode == 3 and "distribution_schedule is not implemented; Q-037 remains open" \
-        in taxed.stderr
+    assert taxed.returncode == 2 and "requires tax.foundation.distribution_file" in taxed.stderr
     opt = subprocess.run([sys.executable, str(WORK / "backtest.py"), "optimize", "--start",
                           "2018-01-01", "--optimization-mode", "walk-forward"],
                          capture_output=True, text=True, cwd=str(tmp_path))

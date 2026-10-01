@@ -46,12 +46,13 @@ from typing import Optional
 
 from .allocation import strategic_targets
 from .app import (PortfolioRunResult, PreTaxRun, PreparedRun, build_hooks, check_supported_run,
-                  find_tax_hooks, prepare_run, prepared_input_sha256, write_portfolio_outputs)
+                  distribution_ignored_issues, find_tax_hooks, needs_distribution_schedule,
+                  prepare_run, prepared_input_sha256, write_portfolio_outputs)
 from .calendar import elapsed_days, inception_date, last_key_on_or_before
 from .config import ResolvedConfig, int_grid, parse_decimal_grid
 from .engine import EngineResult, EngineStart, run_engine
 from .errors import BacktestError, ConfigError, InsufficientHistoryError
-from .foundation import FoundationHooks
+from .foundation import FOUNDATION_PROFILES, FoundationHooks, map_distribution_schedule
 from .manifest import code_version, run_timestamp
 from .metrics import PathSeries, compute_run_metrics, cpi_window, turnover
 from .models import RISKY_ASSETS, State, TradeReason, canonical_assets
@@ -60,7 +61,7 @@ from .optimizer import (OPT_FIELDS, OptimizerError, OptimizerSpec, Candidate, OB
                         required_assets, resolve_jobs, selection_key, TIE_BREAK)
 from .rebalancing import BoundaryRebalanceHooks, hooks_from_config
 from .reporting import SUMMARY_FIELDS, run_directory, write_csv, write_json
-from .settlement import settle_foundation_shadow_costs, settle_foundation_terminal, settle_terminal
+from .settlement import settle_foundation, settle_foundation_shadow_costs, settle_terminal
 from .signal_analysis import install_tracker
 from .tax import IndividualTaxHooks
 
@@ -567,8 +568,10 @@ class Segment:
 
 def run_segment(prepared: PreparedRun, window: Window, sel: Selection,
                 prev: Optional[OOSContinuationState], inception: dt.date,
-                shadow: bool) -> Segment:
-    """One OOS segment of one path (actual or zero-tax shadow) through the central engine."""
+                shadow: bool, distributions: Optional[dict] = None) -> Segment:
+    """One OOS segment of one path (actual or zero-tax shadow) through the central engine.
+    ``distributions``: the scheduled foundation distributions whose actual week lies in this
+    segment (Q-037; mapped once on the whole OOS calendar, so every row is paid exactly once)."""
     cfg = sel.config
     inputs = dataclasses.replace(prepared.inputs_for(cfg), weeks=window.oos_weeks,
                                  run_start=window.test_start)
@@ -576,7 +579,8 @@ def run_segment(prepared: PreparedRun, window: Window, sel: Selection,
     funding = BoundaryRebalanceHooks(hooks_from_config(cfg, plan["pending_band"]),
                                      window.test_start, plan["force"])
     tax_state = copy.deepcopy(prev.tax_state) if prev is not None else None
-    hooks = build_hooks(cfg, inception, funding=funding, tax_state=tax_state, zero_rates=shadow)
+    hooks = build_hooks(cfg, inception, funding=funding, tax_state=tax_state, zero_rates=shadow,
+                        distributions=distributions)
     start = None if prev is None else EngineStart(prev.portfolio, prev.last_week)
     result = run_engine(inputs, hooks, start=start, signal_states=plan["signal_states"],
                         carried=plan["carried"])
@@ -609,16 +613,28 @@ class OOSPath:
     shadow_engine: EngineResult
 
 
+def oos_distributions(prepared: PreparedRun, windows, cfg) -> tuple:
+    """Q-037: the global distribution schedule mapped once onto the stitched OOS calendar ->
+    ({actual week: rows}, ignored rows). Training runs apply the rows of their own range to
+    their hypothetical objective; the live OOS path pays every row exactly once."""
+    if cfg.get("tax.profile") not in FOUNDATION_PROFILES or not needs_distribution_schedule(cfg):
+        return None, ()
+    weeks = tuple(w for win in windows for w in win.oos_weeks)
+    return map_distribution_schedule(prepared.distribution_schedule.rows, weeks)
+
+
 def run_oos_path(prepared: PreparedRun, windows, selections, profile: str) -> OOSPath:
     """The continuous OOS path (and its continuous zero-tax shadow) for given selections."""
     inception = inception_date(windows[0].test_start)
+    by_week, _ = oos_distributions(prepared, windows, selections[0].config)
     segs, shadow, prev, prev_s = [], [], None, None
     for w, sel in zip(windows, selections):
-        seg = run_segment(prepared, w, sel, prev, inception, shadow=False)
+        dist = None if by_week is None else {k: v for k, v in by_week.items() if k in w.oos_weeks}
+        seg = run_segment(prepared, w, sel, prev, inception, shadow=False, distributions=dist)
         segs.append(seg)
         prev = seg.state
         if profile != "none":
-            s = run_segment(prepared, w, sel, prev_s, inception, shadow=True)
+            s = run_segment(prepared, w, sel, prev_s, inception, shadow=True, distributions=dist)
             shadow.append(s)
             prev_s = s.state
     actual = stitch([s.engine for s in segs])
@@ -687,8 +703,9 @@ def finish(spec, prepared, windows, selections, training, path: OOSPath, write=T
     terminal, tax_params, shadow_cost = None, None, None
     if isinstance(tax_hooks, FoundationHooks):
         tax_params = tax_hooks.params
-        terminal = settle_foundation_terminal(actual.final_snapshot, tax_params,
-                                              final_state.tax_state, capital, inception)
+        terminal = settle_foundation(actual.final_snapshot, tax_params, final_state.tax_state,
+                                     capital, inception, final_state.targets,
+                                     actual.weeks[-1].effective_states)
         zero = tax_params.zero_rates()
         s_state = path.shadow_segments[-1].state
         shadow_cost = settle_foundation_shadow_costs(
@@ -722,6 +739,9 @@ def finish(spec, prepared, windows, selections, training, path: OOSPath, write=T
     ctx = prepared.context()
     for r in (s.engine for s in path.segments):
         ctx["report"].extend(r.issues)
+    _, ignored = oos_distributions(prepared, windows, selections[0].config)
+    ctx["report"].extend(distribution_ignored_issues(
+        ignored, [w for win in windows for w in win.oos_weeks]))
     oos_weeks = tuple(w for win in windows for w in win.oos_weeks)
     # targets / signal parameters in summary.csv only when every OOS window used the same
     # ones; otherwise per window in walk_forward_results.csv

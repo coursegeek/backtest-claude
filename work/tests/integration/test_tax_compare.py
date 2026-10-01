@@ -481,24 +481,52 @@ def _assert_nothing_written(out):
 
 
 def test_atomic_failure_q037_distribution_schedule(tmp_path):
+    """Q-037: distribution_schedule without tax.foundation.distribution_file fails the whole
+    compare naming the first foundation profile (ConfigError, no fallback to terminal)."""
     cfg = base_cfg(tmp_path / "o", "--foundation-tax-event", "distribution_schedule")
     with pytest.raises(tc.TaxCompareError) as e:
         tc.run_tax_compare(cfg)
     assert e.value.profile == "family_foundation_15" and "Q-037" in str(e.value)
-    assert isinstance(e.value.cause, NotImplementedCommand) and e.value.exit_code == 3
+    assert isinstance(e.value.cause, ConfigError) and e.value.exit_code == 2
     _assert_nothing_written(tmp_path / "o")
 
 
-def test_atomic_failure_q047_internal_trading_tax(tmp_path):
+def test_atomic_failure_q037_q047_combination(tmp_path):
+    """Q-037 x Q-047: a non-zero internal trading tax with distribution_schedule is undefined
+    -> ConfigError naming the foundation profile; nothing is written."""
     f = tmp_path / "c.yaml"
     f.write_text(S06.read_text(encoding="utf-8") + "    internal_trading_tax_rate: 0.1\n",
                  encoding="utf-8")
+    sched = tmp_path / "s.csv"
+    sched.write_text("date,amount\n2020-06-05,1000\n", encoding="utf-8")
     cfg = resolve(["tax-compare", "--config", str(f), "--tax-profile", "individual_pl,family_foundation_19",
+                   "--foundation-tax-event", "distribution_schedule", "--distribution-file", str(sched),
                    "--output-dir", str(tmp_path / "o")])
     with pytest.raises(tc.TaxCompareError) as e:
         tc.run_tax_compare(cfg)
-    assert e.value.profile == "family_foundation_19" and "Q-047" in str(e.value)
+    assert e.value.profile == "family_foundation_19"
+    assert "not defined by clean-room specification adjudication" in str(e.value)
     _assert_nothing_written(tmp_path / "o")
+
+
+def test_internal_trading_tax_in_tax_compare(tmp_path):
+    """Q-047: a non-zero internal trading tax (terminal mode) runs for both foundation profiles
+    with identical weekly paths and identical internal taxes; individual_pl is unaffected."""
+    f = tmp_path / "c.yaml"
+    f.write_text(S06.read_text(encoding="utf-8") + "    internal_trading_tax_rate: 0.1\n",
+                 encoding="utf-8")
+    res = tc.run_tax_compare(resolve(["tax-compare", "--config", str(f), "--tax-profile", ALL,
+                                      "--output-dir", str(tmp_path / "o")]), write=False)
+    r = res.results
+    f15, f19 = r["family_foundation_15"], r["family_foundation_19"]
+    assert [w.ledger_end for w in f15.engine.weeks] == [w.ledger_end for w in f19.engine.weeks]
+    ev15 = [(e.tax_year, e.amount) for e in f15.terminal.final_tax_state.tax_events
+            if e.event_type == "foundation_internal_trading_tax"]
+    assert ev15 and ev15 == [(e.tax_year, e.amount) for e in f19.terminal.final_tax_state.tax_events
+                             if e.event_type == "foundation_internal_trading_tax"]
+    assert f15.terminal.final_tax_state.internal_trading_tax_paid > 0
+    assert not [e for e in r["individual_pl"].tax_state.tax_events
+                if e.event_type == "foundation_internal_trading_tax"]
 
 
 def test_atomic_failure_insolvency_of_one_profile(tmp_path, monkeypatch):
@@ -566,7 +594,7 @@ def test_cli_006_failures(tmp_path):
     assert r.returncode == 2 and "duplicate" in r.stderr
     r = cli("tax-compare", "--config", str(S06), "--foundation-tax-event", "distribution_schedule",
             "--output-dir", str(tmp_path))
-    assert r.returncode == 3 and "family_foundation_15" in r.stderr and "Q-037" in r.stderr
+    assert r.returncode == 2 and "family_foundation_15" in r.stderr and "Q-037" in r.stderr
     assert not any(tmp_path.iterdir())
 
 

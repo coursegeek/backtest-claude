@@ -154,9 +154,11 @@ def test_cli_007_stocks_price_override(tmp_path):
 def test_portfolio_commands_validate_then_stop():
     """Features outside this build resolve/validate their config and stop with exit 3;
     invalid configurations stop with exit 2 before any data is loaded."""
+    r = cli("optimize", "--optimize-params", "weights,ma")
+    assert r.returncode == 3 and "WF-006" in r.stderr
     r = cli("run", "--weights", "stocks=1", "--tax-profile", "family_foundation_15",
             "--foundation-tax-event", "distribution_schedule")
-    assert r.returncode == 3 and "Q-037" in r.stderr
+    assert r.returncode == 2 and "tax.foundation.distribution_file" in r.stderr and "Q-037" in r.stderr
     r = cli("optimize", "--optimization-mode", "walk-forward", "--optimize-params",
             "weights,confirmation")
     assert r.returncode == 2 and "WF-010" in r.stderr
