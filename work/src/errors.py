@@ -37,12 +37,14 @@ class DataValidationError(BacktestError):
 class WarmupError(BacktestError):
     """ERR-003."""
 
-    def __init__(self, asset: str, available: int, required: int, first_week):
+    def __init__(self, asset: str, available: int, required: int, first_week, note: str = ""):
         self.asset, self.available, self.required = asset, available, required
+        self.first_week, self.note = first_week, note
         super().__init__(
-            f"insufficient warm-up for {asset}: {available} weekly observations before "
-            f"{first_week}, required {required} (ma + max(confirmation) + max(delay)); "
-            f"choose a later --start or set signal.initial_state=RISK_ON explicitly")
+            f"ERR-003 insufficient warm-up for {asset}: available {available} < required "
+            f"{required} weekly observations before the first run week {first_week} (ma + "
+            f"max(confirm_off, confirm_on) + delay); choose a later --start or set "
+            f"signal.initial_state=RISK_ON explicitly" + (f"; {note}" if note else ""))
 
 
 class DividendModeError(BacktestError):

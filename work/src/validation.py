@@ -175,9 +175,11 @@ def check_warmup(asset: str, keys, first_week: dt.date, params, initial_state: s
         return None
     if initial_state == "RISK_ON":
         return ValidationIssue(Severity.WARNING, "warmup_short", asset,
-                               f"{have} weeks of history before {first_week} < required {need}; "
-                               "initial state RISK_ON by explicit configuration", first_week,
-                               "NORM-010;SIG-003")
+                               f"available {have} < required {need} weekly observations before "
+                               f"{first_week}; fallback initial state by the explicit opt-in "
+                               "signal.initial_state=RISK_ON: the state machine replays the short "
+                               "history and starts RISK_ON unless it confirms a transition",
+                               first_week, "NORM-010;SIG-003;ERR-003;Q-013")
     raise WarmupError(asset, have, need, first_week)
 
 

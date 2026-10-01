@@ -311,7 +311,8 @@ SUMMARY_FIELDS = (
        "cpi_label", "real_return_warning", "cpi_start_month", "cpi_end_month", "cpi_start",
        "cpi_end", "cpi_start_imputed", "cpi_end_imputed", "cpi_note",
        "as_of_date", "dropped_incomplete_weeks",
-       "common_data_start", "common_data_end", "range_truncations", "range_truncation_detail"]
+       "common_data_start", "common_data_end", "range_truncations", "range_truncation_detail",
+       "signal_initial_state", "warmup_fallback_assets"]
     + [f"target_{s}" for s in SLEEVES]
     + [f"risk_{st}_share_{a}" for a in ("stocks", "gold", "btc") for st in ("on", "off")]
     + [f"signal_{a}_{f}" for a in ("stocks", "gold", "btc") for f in SIGNAL_PARAM_FIELDS]
@@ -319,6 +320,14 @@ SUMMARY_FIELDS = (
        "applied_rf_interest_rate", "applied_distribution_rate", "applied_internal_trading_tax_rate"]
     + list(APPLIED_PROFILE_FIELDS)
     + [k.replace(".", "_") for k in TAX_ASSUMPTION_KEYS])
+
+
+def warmup_fallback_assets(report) -> list:
+    """Assets whose signal warm-up was shorter than required and that started under the
+    explicit signal.initial_state=RISK_ON opt-in (Q-013, SIG-003)."""
+    if report is None:
+        return []
+    return sorted({i.role for i in report.issues if i.code == "warmup_short"})
 
 
 def applied_profile_cells(params) -> dict:
@@ -412,6 +421,9 @@ def summary_row(cfg, res) -> dict:
         "range_truncations": len(res.truncations),
         "range_truncation_detail": "|".join(f"{r}:{side}:{own}->{eff}"
                                             for r, side, own, eff in res.truncations),
+        # Q-013: the explicit RISK_ON opt-in is the only fallback for a short warm-up
+        "signal_initial_state": cfg.get("signal.initial_state"),
+        "warmup_fallback_assets": "|".join(warmup_fallback_assets(getattr(res, "report", None))),
     })
     c = m.cpi
     row.update({"cpi_label": c.label if c else cfg.get("cpi.label"),

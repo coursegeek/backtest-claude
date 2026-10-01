@@ -35,4 +35,8 @@ def build_manifest(provenances, as_of: dt.date, timestamp: dt.datetime, command:
         "timezone": "Europe/Warsaw",
         "as_of_date": as_of.isoformat(),
         "sources": [p.to_dict() for p in sorted(provenances, key=lambda p: p.role)],
+        # DATA-008: every --data-file / data.overrides source actually used (path and SHA-256)
+        "data_overrides": {p.role: {"config_key": p.config_key, "path": p.path, "sha256": p.sha256}
+                           for p in sorted(provenances, key=lambda p: p.role)
+                           if p.config_key.startswith("data.overrides.")},
     }

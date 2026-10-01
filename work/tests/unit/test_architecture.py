@@ -114,3 +114,34 @@ def test_optimizer_is_an_orchestrator():
     for mod in ("engine", "tax", "foundation", "settlement", "metrics", "reporting", "config",
                 "cli", "scans", "tax_compare"):
         assert "optimizer" not in imports(mod), mod
+
+
+def test_portfolio_accounting_layers():
+    """ARCH-005: NAV, cash (RF components), costs and trade accounting are separate layers -
+    ledger (components, NAV identity), rf, costs, cost_basis (lots) and the engine's
+    WorkingPortfolio primitives - with their own tests (test_ledger, test_rf, test_costs,
+    test_cost_basis, test_engine, test_rebalancing, test_accounting_identity); rebalancing and
+    sell_to_pay plug into the engine and none of them knows taxes, loading or reporting."""
+    assert imports("ledger") <= {"models", "rf"}
+    assert imports("rf") <= {"models"}
+    assert imports("costs") <= {"errors"} and imports("cost_basis") <= {"errors"}
+    assert not imports("engine") & {"tax", "foundation", "settlement", "rebalancing", "sell_to_pay",
+                                    "reporting", "manifest", "app", "data_loader", "metrics"}
+    for mod in ("ledger", "rf", "costs", "cost_basis", "rebalancing", "sell_to_pay"):
+        assert not imports(mod) & {"tax", "foundation", "reporting", "data_loader", "app"}, mod
+
+
+def test_reporting_is_a_separate_layer():
+    """ARCH-009: CSV/JSON outputs, summary, terminal artifacts and the data manifest are written
+    by reporting.py and manifest.py from already computed results; no computational layer
+    depends on them and they compute no metric, trade, tax or settlement themselves."""
+    assert imports("reporting") <= {"tax"} and imports("manifest") <= {"", "calendar", "config"}
+    for mod in ("engine", "ledger", "costs", "cost_basis", "rf", "tax", "foundation", "settlement",
+                "metrics", "rebalancing", "sell_to_pay", "signals", "signal_analysis",
+                "confirmation", "scheduling", "data_loader", "validation", "calendar",
+                "allocation"):
+        assert not imports(mod) & {"reporting", "manifest"}, mod
+    text = (SRC / "reporting.py").read_text(encoding="utf-8")
+    for word in ("compute_run_metrics", "run_engine", "load_role", "settle_terminal",
+                 "settle_foundation", "close_tax_year", "plan_rebalance"):
+        assert word not in text, word

@@ -10,8 +10,8 @@ from __future__ import annotations
 import argparse
 import sys
 
-from .config import (RISKY_ASSETS, ResolvedConfig, int_grid, load_config_file, parse_grid,
-                     percent_grid, percent_value, set_path)
+from .config import (RISKY_ASSETS, ResolvedConfig, int_grid, load_config_file,
+                     normalize_data_key, parse_grid, percent_grid, percent_value, set_path)
 from .errors import BacktestError, ConfigError
 
 COMMANDS = ("run", "signals", "delay-scan", "threshold-scan", "optimize", "tax-compare",
@@ -88,12 +88,21 @@ def cli_layer(args) -> dict:
         put(f"data.{k}", v)
     put("tax.foundation.distribution_file", args.distribution_file)
     if args.data_file:
-        overrides = {}
+        overrides, raw = {}, {}
         for item in args.data_file:
             if "=" not in item:
                 raise ConfigError(f"--data-file expects KEY=PATH, got {item!r} (DATA-008)")
             k, v = item.split("=", 1)
-            overrides[k.strip()] = v.strip()
+            role = normalize_data_key(k)
+            if role in overrides:                   # never a silent "last wins"
+                raise ConfigError(f"--data-file: source {role!r} given twice ({raw[role]!r} and "
+                                  f"{item!r}) (DATA-008)")
+            direct = files.get(f"{role}_file")
+            if direct is not None:
+                raise ConfigError(f"source {role!r} given twice in one command: --data-file "
+                                  f"{item!r} and --{role.replace('_', '-')}-file {direct!r} "
+                                  "(DATA-008)")
+            overrides[role], raw[role] = v.strip(), item
         put("data.overrides", overrides)
     put("cpi.missing_policy", args.cpi_missing_policy)
     put("allocation.targets", args.weights)

@@ -13,7 +13,9 @@ należności przy rebalancingu (TAX-007), moduł podatkowy `individual_pl` (`src
 fundacji (`src/foundation.py`), terminal settlement (`src/settlement.py`), pre-tax shadow run
 (Q-015), moduł metryk (`src/metrics.py`), `summary.csv`, orkiestrator `tax-compare`
 (`src/tax_compare.py`), scany (`src/scans.py`), optimizer in-sample (`src/optimizer.py`) i
-walk-forward (`src/walk_forward.py`).
+walk-forward (`src/walk_forward.py`). Sesja 13 domknęła tanie MUST przed decyzją Q-037/Q-047
+(CLI-001/007/008/009, TEST-020, TEST-023; Q-011/013/024/025/038 RESOLVED) bez nowej
+funkcjonalności silnika.
 Nie ma jeszcze: `tax.foundation.tax_event=distribution_schedule` (Q-037, jawny błąd),
 niezerowego internal trading tax fundacji (Q-047, jawny błąd), rolling_metrics.csv
 (MET-022/023, SHOULD). Te tryby kończą się kodem 3 z jawnym komunikatem (bez częściowych
@@ -105,8 +107,8 @@ Warstwy: `models`, `errors`, `config`, `calendar`, `availability`, `data_loader`
    (bez forward-fill, bez zerowania historii SMA); luka ma flagi `calendar_gap` (zawsze),
    `counter_reset_gap` (gdy liczniki były niezerowe) i `sma_spans_gap` (okno SMA obejmuje lukę);
    warm-up liczy dostępne obserwacje przed startem.
-8. **Warm-up (Q-013 propozycja)**: za mało historii → `WarmupError` (ERR-003); jawne
-   `signal.initial_state=RISK_ON` zamienia błąd w ostrzeżenie.
+8. **Warm-up (Q-013, RESOLVED w sesji 13)**: za mało historii → `WarmupError` (ERR-003); jawne
+   `signal.initial_state=RISK_ON` zamienia błąd w ostrzeżenie (szczegóły: punkt 112).
 9. **Stan początkowy (Q-019, RESOLVED)**: stan efektywny = wykonania zaplanowane przed pierwszym tygodniem;
    późniejsze pozostają w kolejce (`PreStartState.pending`). Brak potwierdzonej zmiany w historii
    → ostrzeżenie `initial_state_fallback` (SIG-003).
@@ -562,7 +564,8 @@ Warstwy: `models`, `errors`, `config`, `calendar`, `availability`, `data_loader`
     największego wymagania, cały scan kończy się ERR-003 przed wykonaniem gridu (bez cichego
     przesuwania startu dla części punktów). Bez `--start`: pierwszy wspólny tydzień zakresu
     wspólnego, przed którym każde aktywne aktywo ma to wymaganie (`app.first_warmup_week`,
-    `first_week_rule` w manifeście). Reguła `run` bez zmian (Q-013 OPEN).
+    `first_week_rule` w manifeście). Od sesji 13 ta sama reguła obowiązuje `run` bez `--start`
+    (Q-025, punkt 113).
 81. **delay-scan / threshold-scan (ALLOC-002)**: `--asset X` = strategia single-asset
     (`allocation.single_asset = X`, sleeve 100%, RF tylko rezerwa risk-off, strategic rf 0);
     `--weights`/`allocation.targets` z `--asset` to błąd (bez ukrytych wag); ładowane są tylko
@@ -790,3 +793,66 @@ Warstwy: `models`, `errors`, `config`, `calendar`, `availability`, `data_loader`
     192 kandydatów na okno, --jobs 2, ~30 s): OOS 2006-04-28..2011-04-22 (1821 dni),
     2011-04-29..2016-04-22 (1821 dni), 2016-04-29..2016-06-10 (43 dni, częściowe), kod 0.
     Scenariusz S09 w AB_SCENARIOS pozostaje bez zmian (brak sztucznych wyników).
+
+## Domknięcie MUST przed freeze (sesja 13)
+
+112. **Q-013 (RESOLVED) - warm-up**: dla `signal.initial_state=reconstruct_history` historia
+    przed pierwszym tygodniem krótsza niż `ma + max(confirm_off, confirm_on) + delay` ->
+    `WarmupError` (ERR-003) z aktywem, liczbą dostępnych i wymaganych obserwacji, pierwszym
+    tygodniem runu i - dla niekanonicznego źródła - jego ostrzeżeniem proweniencji (np. Q-002).
+    Wymagań nie skracamy, jawnego `--start` nie przesuwamy, brak flagi `--allow-short-warmup`.
+    Jedyny fallback to jawne `signal.initial_state=RISK_ON` (np. w pliku config): run startuje,
+    `validation_report.csv` ma warning `warmup_short`, `summary.csv` ma
+    `signal_initial_state` i `warmup_fallback_assets`, `data_manifest.json` ma
+    `signal_initial_state` i `initial_state_fallback`. CLI-001 na danych staged kończy się
+    "ERR-003 insufficient warm-up for gold: available 51 < required 55 weekly observations
+    before the first run week 1971-01-01 ... gold source is non-canonical: ... Q-002" (kod 1);
+    ta sama komenda na fixture z historią złota od 1960 działa end-to-end.
+113. **Q-025 (RESOLVED) - start bez `--start`**: każda komenda bez `run.start` zaczyna od
+    najwcześniejszego tygodnia wspólnego zakresu zwrotów, przed którym każde aktywne aktywo ma
+    pełny warm-up (`first_warmup_week`; dotąd tylko scany/optimizer), raportowanego jako
+    `effective_first_week` i `first_week_rule` (manifest). Przykład: stocks 0.4 / gold 0.4 / rf
+    0.2 bez `--start` -> 1971-01-29 (pierwszy tydzień z 55 obserwacjami złota), nie ERR-003 w
+    pierwszym wspólnym tygodniu. Wspólna luka kalendarza (żadne źródło nie ma tygodnia, np.
+    1933-03-10) jest raportowana i pomijana bez forward-fill (Q-012), nie jest
+    `missing.return_policy=error`. Dla runów, w których warm-up był spełniony na początku
+    zakresu wspólnego, start jest identyczny jak wcześniej (regresja bez zmian).
+114. **TEST-023 / Q-011 / Q-038**: historia stock signal zaczyna się w piątek 1920-01-02 (Q-011;
+    brak założenia historii sprzed 1920). Komenda `signals` (oficjalny interfejs signal-only,
+    inne znaczenie niż `--rebalance signal-only`, Q-038) analizuje tę historię bez portfela i
+    bez serii zwrotów. Pełny run z aktywnym sleeve'em stocks i jawnym `--start` wcześniejszym niż
+    pierwszy tydzień używanego `stocks_return_file` kończy się błędem "requested start ...
+    precedes the available stocks return history (first available return week 1926-07-02) ...
+    provide an alternative stocks_return_file ... (TEST-023)" (kod 1, nic nie jest zapisywane)
+    zamiast cichego przesunięcia startu na 1926-07-02; z alternatywnym plikiem zwrotów (format
+    Fama/French) pokrywającym wcześniejszy okres run działa od żądanego tygodnia. Pozostałe
+    różnice zakresów (koniec danych, dywidendy, BTC, złoto) zachowują obcięcie NORM-011.
+115. **DATA-008 / Q-025 - `--data-file`**: klucze `stocks_price`, `stocks_return`, `gold`, `btc`,
+    `dividend`, `cpi` (opcjonalnie z sufiksem `_file`, `config.normalize_data_key`); nieznany
+    klucz, to samo źródło dwa razy w jednej komendzie (także z bezpośrednią flagą
+    `--<klucz>-file`) albo nieznany klucz w `data.overrides` pliku config -> ConfigError (kod 2)
+    przed jakimkolwiek odczytem danych, bez "last wins". Override trafia do
+    `config_resolved.yaml` (`data.overrides`) i `data_manifest.json` (`data_overrides`:
+    config_key, path, sha256, oraz `sources`).
+116. **Q-024 / CLI-007**: dosłowny przykład bez wag kończy się ALLOC-001 (bez ukrytej
+    alokacji); wariant z `--weights stocks=1.0` i własnym plikiem SPX działa, a manifest
+    pokazuje ścieżkę i SHA-256 pliku. **CLI-009**: dokładna komenda S07 jest PASS jako
+    mechanika komendy; proxy złota/akcji pozostają osobnymi DATA_BLOCKER (Q-002/Q-004,
+    SEM-003/SEM-001) i są raportowane jako ostrzeżenia proweniencji.
+117. **TEST-020**: dwa identyczne runy CLI (config, as_of_date, SHA-256, polityki źródeł, kod)
+    dla none, individual_pl i family_foundation_19 dają bajtowo identyczne pliki wyników
+    (summary, weekly_portfolio, trades, tax_events, payments, rf_transfers, rebalance_events,
+    signals, realizations, dividend_reinvestments, config_resolved, weekly_normalized,
+    terminal_settlement, tax/foundation_state, validation_report); `data_manifest.json` różni
+    się tylko `run_timestamp`. Powtórzony walk-forward (jobs=1) jest bajtowo identyczny poza
+    timestampami manifestów.
+118. **ARCH-005 / ARCH-009 (SHOULD)**: odpowiedzialności `src/portfolio.py` ze specyfikacji
+    są rozdzielone na ledger, rf, costs, cost_basis, prymitywy WorkingPortfolio silnika,
+    rebalancing i sell_to_pay (testy własne + test architektury
+    `test_portfolio_accounting_layers`); reporting.py i manifest.py zapisują wyniki już
+    policzone, żadna warstwa obliczeniowa od nich nie zależy
+    (`test_reporting_is_a_separate_layer`).
+119. **Odroczone SHOULD (bez wpływu na MUST)**: DIV-009 `spread_annual_dps` (brak danych
+    trailing/annual DPS; `use_supplied_dividend_return` działa), MET-022/023 rolling metrics,
+    REP-011 tabela konsolowa. MUST nie-PASS: FND-002 (Q-047), FND-005 (Q-037) oraz 5 wierszy
+    DATA_BLOCKER (SEM-001, SEM-003, SCHEMA-005, SEM-007, TEST-038).

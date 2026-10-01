@@ -36,7 +36,8 @@ from .calendar import (common_range, elapsed_days, first_key_on_or_after, first_
 from .config import ResolvedConfig
 from .data_loader import load_dividend_cash, load_role
 from .errors import (BacktestError, ConfigError, DataFileNotFound, DataValidationError,
-                     DividendModeError, NotImplementedCommand, WarmupError)
+                     DividendModeError, InsufficientHistoryError, NotImplementedCommand,
+                     WarmupError)
 from .manifest import build_manifest, run_timestamp
 from .costs import CostModel
 from .engine import ComposedHooks, EngineInputs, WeekMarket, run_engine
@@ -133,6 +134,15 @@ def run_signals(cfg: ResolvedConfig, write: bool = True) -> SignalRunResult:
     return result
 
 
+def initial_state_manifest(cfg: ResolvedConfig, report) -> dict:
+    """Q-013: configured initial-state policy and every asset that started from the explicit
+    RISK_ON opt-in because its warm-up was short (also a validation_report.csv warning)."""
+    return {"signal_initial_state": cfg.get("signal.initial_state"),
+            "initial_state_fallback": [{"asset": i.role, "first_week": str(i.week_key),
+                                        "message": i.message}
+                                       for i in report.issues if i.code == "warmup_short"]}
+
+
 def write_signal_outputs(cfg: ResolvedConfig, result: SignalRunResult) -> Path:
     ts = run_timestamp()
     out = run_directory(cfg.get("report.output_dir"), cfg.get("report.run_name"), ts)
@@ -146,6 +156,7 @@ def write_signal_outputs(cfg: ResolvedConfig, result: SignalRunResult) -> Path:
     manifest = build_manifest(result.provenances, result.as_of, ts, cfg.command)
     manifest["dropped_incomplete_weeks"] = result.dropped_incomplete_weeks
     manifest["first_analysed_week"] = {a: k.isoformat() for a, k in sorted(result.first_weeks.items())}
+    manifest.update(initial_state_manifest(cfg, result.report))
     write_json(out / "data_manifest.json", manifest)
     return out
 
@@ -391,9 +402,11 @@ def build_run(cfg: ResolvedConfig, dividend_mode: Optional[str] = None,
     all compared profiles so that every profile shares one calendar (Q-023).
     ``warmup_params`` (asset -> SignalParams) replaces the configured parameters in the warm-up
     requirement (NORM-010/ERR-003): a scan passes the largest requirement of its grid so that
-    one calendar is valid for every grid point. ``auto_start`` (scans only): without run.start
-    the first return week is the first week of the common range at which every asset has that
-    warm-up (never a later start for only some grid points). ``assets`` (optimize): the
+    one calendar is valid for every grid point. Without run.start (Q-025, every command) the
+    first return week is the first week of the common range at which every asset has that
+    warm-up (never a later start for only some grid points); ``auto_start`` is accepted for
+    the callers that always asked for it and changes nothing. An explicit run.start before the
+    stocks return history of an active stocks sleeve is an error (TEST-023). ``assets`` (optimize): the
     union of the risky assets of every candidate; every source of the union bounds the one
     common calendar of all candidates and the prepared input carries no strategic targets
     (each candidate brings its own, ``PreparedRun.inputs_for``)."""
@@ -438,12 +451,14 @@ def build_run(cfg: ResolvedConfig, dividend_mode: Optional[str] = None,
     params = {a: cfg.signal_params(a) for a in assets}
     wparams = dict(params, **(warmup_params or {}))
     initial_state = cfg.get("signal.initial_state")
+    check_stock_return_start(cfg, assets, ff_stock, ff.provenance)
     first = first_return_week(cfg.start, start)
     first_rule = "run.start" if cfg.start else "common range start"
-    if auto_start and cfg.start is None and initial_state != "RISK_ON":
+    if cfg.start is None and initial_state != "RISK_ON":               # Q-025
         first = first_warmup_week(ff_stock, start, end, {a: series[a].keys() for a in assets},
                                   {a: wparams[a].minimum_warmup_weeks for a in assets})
-        first_rule = "first common week with the complete warm-up of every grid point"
+        first_rule = ("first common week with the complete signal warm-up of every asset"
+                      + (" and grid point" if warmup_params else "") + " (Q-025)")
     last = last_return_week(cfg.end, end)
     if div_mode == "smoothed_weekly":
         for i in validate_dividend_series(div_series, first):
@@ -461,7 +476,11 @@ def build_run(cfg: ResolvedConfig, dividend_mode: Optional[str] = None,
     if first > last:
         raise ConfigError(f"empty backtest range: first week {first} after last week {last}")
     for a in assets:
-        warn = check_warmup(a, series[a].keys(), first, wparams[a], initial_state)
+        try:
+            warn = check_warmup(a, series[a].keys(), first, wparams[a], initial_state)
+        except WarmupError as e:
+            raise WarmupError(e.asset, e.available, e.required, e.first_week,
+                              data_blocker_note(series[a].provenance)) from None
         if warn:
             report.add(warn)
     sources = {"stocks_return": [p.week_key for p in ff_stock]}
@@ -538,6 +557,32 @@ def build_run(cfg: ResolvedConfig, dividend_mode: Optional[str] = None,
                warmup_weeks={a: wparams[a].minimum_warmup_weeks for a in assets},
                first_week_rule=first_rule)
     return inputs, ctx
+
+
+def check_stock_return_start(cfg: ResolvedConfig, assets, ff_stock, provenance) -> None:
+    """TEST-023 (NORM-012): a full portfolio backtest of an active stocks sleeve cannot start
+    before the stocks return history. An explicit run.start earlier than the first available
+    stocks return week is an error (never silently moved to that week); every other range
+    difference keeps the NORM-011 common-range truncation."""
+    if cfg.start is None or "stocks" not in assets or not ff_stock:
+        return
+    requested = first_key_on_or_after(cfg.start)
+    available = ff_stock[0].week_key
+    if requested < available:
+        raise InsufficientHistoryError(
+            f"requested start {cfg.start} (first return week {requested}) precedes the "
+            f"available stocks return history (first available return week {available}, "
+            f"{provenance.path}); provide an alternative stocks_return_file "
+            f"(--stocks-return-file or --data-file stocks_return=...) to run a full portfolio "
+            f"backtest; signal-only analysis of the earlier price history: the 'signals' command "
+            f"(TEST-023)")
+
+
+def data_blocker_note(provenance) -> str:
+    """Context for ERR-003 on a non-canonical (staged proxy) source."""
+    if provenance.canonical or not provenance.warnings:
+        return ""
+    return f"{provenance.role} source is non-canonical: {'; '.join(provenance.warnings)}"
 
 
 def first_warmup_week(returns, start, end, keys: dict, need: dict) -> dt.date:
@@ -806,6 +851,7 @@ def write_portfolio_outputs(cfg: ResolvedConfig, res: PortfolioRunResult,
     manifest.update({
         "dropped_incomplete_weeks": res.dropped_incomplete_weeks,
         "first_return_week": res.first_week.isoformat(),
+        "first_week_rule": res.prepared.first_week_rule if res.prepared is not None else None,
         "last_return_week": res.last_week.isoformat(),
         "inception_date": inception_date(res.first_week).isoformat(),
         "elapsed_days": elapsed_days(res.first_week, res.last_week),
@@ -826,6 +872,7 @@ def write_portfolio_outputs(cfg: ResolvedConfig, res: PortfolioRunResult,
                                 "pre_terminal_nav, Q-032)"),
         "pre_tax_method": res.pre_tax.method,
         "pre_tax_note": res.pre_tax.note,
+        **initial_state_manifest(cfg, res.report),
         "not_implemented_outputs": ["rolling_metrics.csv (MET-022/023, SHOULD)"],
     })
     if shared:

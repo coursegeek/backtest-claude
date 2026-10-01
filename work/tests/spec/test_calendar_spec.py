@@ -1,7 +1,13 @@
 """TEST-022 (range function), TEST-023, TEST-025, TEST-026."""
+import csv
 import datetime as dt
+import json
+import subprocess
+import sys
+from pathlib import Path
 
 from fixtures.builders import STAGED, ff_text
+from fixtures.market import random_pct
 from src.app import run_signals
 from src.calendar import common_range, friday_key
 from src.config import ResolvedConfig
@@ -62,13 +68,66 @@ def test_common_range_truncation_in_summary(tmp_path):
     assert len(warned) == len(detail)
 
 
-def test_signal_only_1920_full_backtest_needs_returns():
-    """TEST-023 / NORM-012: signal-only analysis of US stocks works from 1920 history even
-    though Fama-French returns start in July 1926."""
+def test_signal_only_1920_full_backtest_needs_returns(tmp_path):
+    """TEST-023 / NORM-012 / Q-011 / Q-038: (A) the 'signals' command analyses US stocks on
+    the stock signal history from Friday 1920-01-02 (the earliest confirmed history, Q-011),
+    without any return series; (B) a full portfolio run with an explicit start before July 1926
+    and the default Fama-French file is refused - never silently moved to 1926-07-02; (C) the
+    same run with an alternative stocks-return file covering the earlier period runs end to
+    end from the requested week."""
+    bt = [sys.executable, str(Path(__file__).resolve().parents[2] / "backtest.py")]
+    # (A) signal-only: whole history from 1920 (default warm-up -> first record 1921) ...
     cfg = ResolvedConfig("signals", cli_layer={"run": {"asset": "stocks", "as_of_date": "2026-09-29",
                                                        "end": "1926-06-30"}})
     res = run_signals(cfg, write=False)
+    assert res.series["stocks"].points[0].week_key == D("1920-01-02")
     assert res.records[0].week_key.year == 1921          # 1920 history + warm-up
     assert res.records[-1].week_key < D("1926-07-02")
     ff = load_ff(STAGED / "F-F_Research_Data_Factors_weekly.csv")
     assert ff.stock_total.points[0].week_key == D("1926-07-02")
+    # ... and through the CLI with an explicit 1920 start (MA 10: 13 weeks of 1920 warm-up)
+    r = subprocess.run(bt + ["signals", "--asset", "stocks", "--start", "1920-04-02", "--end",
+                             "1926-06-30", "--ma", "10", "--as-of-date", "2026-09-29",
+                             "--output-dir", str(tmp_path / "a")], capture_output=True, text=True,
+                       timeout=300)
+    assert r.returncode == 0, r.stderr
+    out = next((tmp_path / "a").iterdir())
+    rows = list(csv.DictReader((out / "signals.csv").open(encoding="utf-8")))
+    assert rows[0]["week_key"] == "1920-04-02" and rows[-1]["week_key"] < "1926-07-02"
+    assert {"signals.csv", "validation_report.csv", "data_manifest.json", "config_resolved.yaml",
+            "weekly_normalized.csv"} <= {f.name for f in out.iterdir()}
+    assert "weekly_portfolio.csv" not in {f.name for f in out.iterdir()}       # no portfolio
+    # (B) full run from 1920 with the default Fama-French returns: a clear error
+    run = bt + ["run", "--weights", "stocks=1.0", "--start", "1920-04-02", "--ma", "10",
+                "--as-of-date", "2026-09-29", "--output-dir", str(tmp_path / "b")]
+    r = subprocess.run(run, capture_output=True, text=True, timeout=300)
+    assert r.returncode == 1
+    for text in ("requested start 1920-04-02", "precedes the available stocks return history",
+                 "first available return week 1926-07-02", "alternative stocks_return_file",
+                 "TEST-023"):
+        assert text in r.stderr, text
+    assert not (tmp_path / "b").exists()                               # nothing written
+    r = subprocess.run(bt + ["run", "--weights", "stocks=1.0", "--start", "1926-06-01",
+                             "--end", "1927-12-31", "--as-of-date", "2026-09-29"],
+                       capture_output=True, text=True, timeout=300, cwd=tmp_path)
+    assert r.returncode == 1 and "first available return week 1926-07-02" in r.stderr
+    # (C) an alternative stocks-return file from 1920 (Fama-French layout, synthetic values)
+    keys = [D("1920-01-02") + dt.timedelta(days=7 * i) for i in range(574)]   # .. 1930-12-26
+    pct = random_pct(len(keys), seed=23)
+    alt = tmp_path / "stocks_return_1920.csv"
+    alt.write_text(ff_text([(k.strftime("%Y%m%d"), round(x - 0.05, 2), 0.0, 0.0, 0.05)
+                            for k, x in zip(keys, pct)]), encoding="utf-8")
+    r = subprocess.run(bt + ["run", "--weights", "stocks=1.0", "--start", "1922-01-06", "--end",
+                             "1930-12-31", "--stocks-return-file", str(alt), "--as-of-date",
+                             "2026-09-29", "--output-dir", str(tmp_path / "c")],
+                       capture_output=True, text=True, timeout=300)
+    assert r.returncode == 0, r.stderr
+    out = next((tmp_path / "c").iterdir())
+    summary = next(csv.DictReader((out / "summary.csv").open(encoding="utf-8")))
+    assert (summary["effective_first_week"], summary["effective_last_week"]) == ("1922-01-06",
+                                                                                  "1930-12-26")
+    weekly = list(csv.DictReader((out / "weekly_portfolio.csv").open(encoding="utf-8")))
+    assert weekly[0]["week_key"] == "1922-01-06" and len(weekly) == 469         # every Friday
+    m = json.loads((out / "data_manifest.json").read_text(encoding="utf-8"))
+    src = next(x for x in m["sources"] if x["role"] == "stocks_return")
+    assert src["path"] == str(alt) and src["config_key"] == "data.stocks_return_file"

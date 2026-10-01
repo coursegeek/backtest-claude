@@ -35,7 +35,7 @@ Core engine nie został napisany; powstały wyłącznie narzędzia audytowe, rap
 | MINOR | 23 (+ Q-050, Q-051, Q-052) |
 | MUST zmapowane bez blokera (`MAPPED`) | 340 w audycie → 347 po adjudykacji |
 | MUST zablokowane decyzją (`BLOCKED`) | 12 w audycie → 5 po adjudykacji (tylko DATA BLOCKER) |
-| MUST `PASS` | 0 w audycie; 139 po sesji 2; 165 po sesji 3; 177 po sesji 4; 217 po sesji 5; 225 po sesji 6; 262 po sesji 7; 287 po sesji 8; 290 po sesji 9; 304 po sesji 10; 318 po sesji 11; 339 po sesji 12 (sekcja 13) |
+| MUST `PASS` | 0 w audycie; 139 po sesji 2; 165 po sesji 3; 177 po sesji 4; 217 po sesji 5; 225 po sesji 6; 262 po sesji 7; 287 po sesji 8; 290 po sesji 9; 304 po sesji 10; 318 po sesji 11; 339 po sesji 12; 345 po sesji 13 (sekcja 13) |
 | SHOULD proponowane do odroczenia | 1 (ERR-007 cache) |
 | Kontrole danych | 58: 27 PASS, 12 FAIL, 14 WARN, 5 INFO |
 | Scenariusze AB + przykłady CLI | 20: 10 wykonalnych, 10 wymaga decyzji |
@@ -157,12 +157,12 @@ specyfikacji dotyczy kompletności BTC przy `as_of` w piątek/sobotę (Q-007).
 
 | Scenariusz | Problem | Pytania |
 |---|---|---|
-| S01 / CLI-001 | warm-up złota 51 < 55 tygodni przed 1971-01-01 | Q-013, Q-002 |
+| S01 / CLI-001 | warm-up złota 51 < 55 tygodni przed 1971-01-01 — sesja 13: Q-013 RESOLVED, ERR-003 na staged jest oczekiwanym skutkiem Q-002; CLI-001 PASS na fixture z historią złota | Q-013, Q-002 |
 | S05 / CLI-005 | dywidendy kończą się 2026-06-26 < `--end` 2026-07-31 (5 tygodni); nazwa pliku z CLI nie istnieje | Q-009, Q-001, Q-008 |
 | S06 / CLI-006 | brak wag (ALLOC-001), `configs/portfolio.yaml` poza clean-room; bez `--start` zakres obejmuje lukę 1933 — sesja 9: rozstrzygnięte zamrożonym configiem V2 `work/configs/tax_compare_s06.yaml` (Q-023 RESOLVED) | Q-023, Q-025, Q-012 |
 | S09 / CLI-011 | 0 okien OOS (13.93 roku < 15 lat treningu) | Q-020, Q-022 |
 | CLI-007 | brak wag → błąd wg ALLOC-001 | Q-024 |
-| CLI-008 | bez `--start` zakres zawiera lukę 1933-03-10 → błąd przy domyślnej polityce | Q-025, Q-012 |
+| CLI-008 | bez `--start` zakres zawiera lukę 1933-03-10 — sesja 13: Q-025 RESOLVED (start po warm-upie, wspólna luka raportowana i pomijana wg Q-012); CLI-008 PASS | Q-025, Q-012 |
 
 Wykonalne bez decyzji (poza ogólnymi Q-001/Q-012 dla historii sygnałów): S02, S03, S04, S07, S08
 oraz CLI-002, CLI-003, CLI-004, CLI-009, CLI-010.
@@ -199,7 +199,7 @@ Repozytorium jest gotowe do rozpoczęcia implementacji warstw niezależnych od b
 6 blokerów; do tego czasu odpowiadające im wiersze pozostają `BLOCKED`, a V2 będzie emitować
 jawne ostrzeżenia lub czytelne błędy zamiast cichych założeń.
 
-## 12. Adjudykacje użytkownika (sesje 2–12)
+## 12. Adjudykacje użytkownika (sesje 2–13)
 
 | Pytanie | Status | Skutek |
 |---|---|---|
@@ -210,6 +210,11 @@ jawne ostrzeżenia lub czytelne błędy zamiast cichych założeń.
 | Q-008 dywidendy | DATA_BLOCKER | Loader kanoniczny wymaga pełnego SCHEMA-005; staged plik tylko przez adapter proxy. SCHEMA-005, SEM-007 i TEST-038 pozostają BLOCKED. |
 | Q-012 luki kalendarza | RESOLVED | Cała historia do rekonstrukcji; luka tygodnia przerywa liczniki confirmation; brak auto forward-fill; polityki `error/drop/carry` tylko dla brakującego źródła w tygodniu kalendarza runu; wspólne luki raportowane. |
 | Q-020 walk-forward | RESOLVED | `train_years=15` bez skracania; brak pełnego okna → „insufficient history for requested walk-forward training window”. |
+| Q-011 historia akcji (sesja 13) | RESOLVED | Najwcześniejsza potwierdzona historia stock signal: piątek 1920-01-02; nazwa pliku z 1885 nie jest dowodem danych; TEST-023 signal-only na tej historii. |
+| Q-013 warm-up (sesja 13) | RESOLVED | Ścisły warm-up: ERR-003 z aktywem, dostępnymi/wymaganymi obserwacjami i pierwszym tygodniem; bez skracania, bez przesuwania jawnego startu, bez nowej flagi; jedyny fallback `signal.initial_state=RISK_ON` (warning + summary/manifest). CLI-001 staged: gold 51 < 55 (Q-002); CLI-001 PASS na fixture z historią złota. |
+| Q-024 CLI-007 (sesja 13) | RESOLVED | Literalny przykład bez wag → ALLOC-001; wariant z `--weights stocks=1.0` testuje override pliku (ścieżka i SHA w manifeście). |
+| Q-025 start i `--data-file` (sesja 13) | RESOLVED | Bez `--start`: najwcześniejszy tydzień wspólnego zakresu z pełnym warm-upem; wspólna luka raportowana i pomijana (Q-012), nie missing.return_policy; klucze stocks_price/stocks_return/gold/btc/dividend/cpi (+_file), nieznany lub zdublowany → ConfigError; override w config_resolved i manifeście. |
+| Q-038 signal-only (sesja 13) | RESOLVED | Komenda `signals` = oficjalna analiza signal-only (bez portfela, bez serii zwrotów, signals.csv + audyt); inne znaczenie niż `--rebalance signal-only`. |
 | Q-017 koszty i RF (sesja 3) | RESOLVED | RF = ledger gotówkowy; koszty/slippage tylko na kupnie/sprzedaży stocks/gold/btc; sprzedaż `net = traded*(1-tc-slip)`, zakup z gotówki `traded = C/(1+tc+slip)`; początkowa alokacja nie jest transakcją. |
 | Q-019 stan początkowy (sesja 3) | RESOLVED | Stan potwierdzony ≠ efektywny; split z efektywnego; wykonania ≥ start pozostają pending i są transakcjami w backteście. |
 | Q-049 tożsamość NAV (sesja 3) | RESOLVED | `abs(NAV - sum(components)) / max(1, abs(NAV)) <= 1e-10`; NAV z komponentów przez `math.fsum`. |
@@ -337,10 +342,24 @@ Wiersze MUST nadal `BLOCKED` (dane niekanoniczne): SEM-001, SEM-003, SCHEMA-005,
   staged kończy się błędem Q-020 (za krótki kalendarz ograniczony BTC); na 26.5 roku danych
   syntetycznych daje 2 pełne okna OOS i 1 częściowe. Q-022 RESOLVED; META-003 PASS.
 
-Stan macierzy: MUST — 339 `PASS`, 6 `IN_PROGRESS`, 2 `MAPPED`, 5 `BLOCKED` (DATA BLOCKER),
-0 `FAIL`; SHOULD — 18 `PASS`. Testy: `python -m pytest work` (wszystkie przechodzą). Żaden wiersz
-zablokowany przez Q-002/Q-004/Q-008 nie został oznaczony `PASS` na podstawie staged plików;
-dowody dla LBMA, segmentów SEM-001 i kanonicznego SCHEMA-005 pochodzą z syntetycznych fixture'ów.
+* Sesja 13 (domknięcie MUST przed decyzją Q-037/Q-047, bez nowej funkcjonalności silnika):
+  ERR-003 z pełnym kontekstem i jedynym fallbackiem `signal.initial_state=RISK_ON` raportowanym
+  w validation_report/summary/manifest (Q-013); start bez `--start` = najwcześniejszy wspólny
+  tydzień z pełnym warm-upem dla każdej komendy (Q-025); jawny start pełnego runu akcji przed
+  historią zwrotów = czytelny błąd zamiast cichego obcięcia do 1926-07-02 (TEST-023);
+  walidacja kluczy `--data-file` (nieznane i zdublowane → ConfigError) i `data_overrides` w
+  manifeście (DATA-008); testy CLI-001 (fixture + staged ERR-003), CLI-007 (ALLOC-001 + wariant
+  wykonywalny), CLI-008 (dokładna komenda bez `--start`), CLI-009 (dokładne S07), TEST-020
+  (pełna deterministyczność trzech profili + powtórzony walk-forward), TEST-023 (trzy
+  przypadki), ARCH-005/ARCH-009 (testy architektury). Q-011, Q-013, Q-024, Q-025, Q-038
+  RESOLVED. Regresja: 24 komendy (runy, S02-S06, S08, scany, optimize, walk-forward, signals,
+  runy od 1926 i bez startu) bez różnic poza nowymi kolumnami/kluczami raportu.
+
+Stan macierzy: MUST — 345 `PASS`, 2 `IN_PROGRESS` (FND-002/Q-047, FND-005/Q-037), 0 `MAPPED`,
+5 `BLOCKED` (DATA BLOCKER), 0 `FAIL`; SHOULD — 20 `PASS`. Testy: `python -m pytest work`
+(wszystkie przechodzą). Żaden wiersz zablokowany przez Q-002/Q-004/Q-008 nie został oznaczony
+`PASS` na podstawie staged plików; dowody dla LBMA, segmentów SEM-001 i kanonicznego SCHEMA-005
+pochodzą z syntetycznych fixture'ów.
 
 <!-- AUDIT_COUNTS
 requirements_total=379
@@ -350,9 +369,9 @@ questions_total=52
 blockers=6
 major=20
 minor=26
-must_mapped=2
+must_mapped=0
 must_blocked=5
-must_pass=339
+must_pass=345
 should_proposed_deferral=1
 input_checks=58
 checks_fail=12
@@ -364,9 +383,9 @@ scenarios_feasible=10
 scenarios_needs_decision=10
 blocker_ids=Q-002,Q-004,Q-005,Q-008,Q-012,Q-020
 data_blocker_ids=Q-002,Q-004,Q-008
-resolved_ids=Q-005,Q-006,Q-012,Q-014,Q-015,Q-016,Q-017,Q-018,Q-019,Q-020,Q-022,Q-023,Q-026,Q-027,Q-029,Q-030,Q-032,Q-033,Q-034,Q-035,Q-039,Q-040,Q-041,Q-045,Q-046,Q-049,Q-050,Q-051,Q-052
-open_questions=20
+resolved_ids=Q-005,Q-006,Q-011,Q-012,Q-013,Q-014,Q-015,Q-016,Q-017,Q-018,Q-019,Q-020,Q-022,Q-023,Q-024,Q-025,Q-026,Q-027,Q-029,Q-030,Q-032,Q-033,Q-034,Q-035,Q-038,Q-039,Q-040,Q-041,Q-045,Q-046,Q-049,Q-050,Q-051,Q-052
+open_questions=15
 must_fail=0
-must_in_progress=6
-should_pass=18
+must_in_progress=2
+should_pass=20
 -->

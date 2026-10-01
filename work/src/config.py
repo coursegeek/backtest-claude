@@ -478,6 +478,22 @@ def _enum(v, name, allowed):
     return v
 
 
+DATA_FILE_KEYS = ("stocks_price", "stocks_return", "gold", "btc", "dividend", "cpi")
+
+
+def normalize_data_key(key: str) -> str:
+    """DATA-008 (Q-025): a --data-file / data.overrides key is one of DATA_FILE_KEYS or the
+    same name with the ``_file`` suffix; anything else is a ConfigError."""
+    k = str(key).strip()
+    if k.endswith("_file"):
+        k = k[:-5]
+    if k not in DATA_FILE_KEYS:
+        raise ConfigError(f"--data-file / data.overrides: unknown source key {key!r}; allowed "
+                          f"{', '.join(sorted(DATA_FILE_KEYS))} (optionally with the _file "
+                          "suffix) (DATA-008)")
+    return k
+
+
 def validate(cfg: ResolvedConfig) -> None:
     for key, allowed in ENUMS.items():
         v = cfg.get(key)
@@ -518,6 +534,16 @@ def validate(cfg: ResolvedConfig) -> None:
                                and (jobs >= 1 or jobs == -1))):
         raise ConfigError(f"performance.jobs / --jobs: 1..N, -1 (all CPUs) or auto, got {jobs!r} "
                           "(ERR-006)")
+    overrides = cfg.get("data.overrides") or {}
+    if not isinstance(overrides, dict):
+        raise ConfigError("data.overrides must map source keys to file paths (DATA-008)")
+    seen = {}
+    for key in overrides:
+        role = normalize_data_key(key)
+        if role in seen:
+            raise ConfigError(f"data.overrides: source {role!r} given twice ({seen[role]!r} and "
+                              f"{key!r}) (DATA-008)")
+        seen[role] = key
     for name in ("run.start", "run.end", "run.as_of_date"):
         parse_date(cfg.get(name), name)
     if cfg.start and cfg.end and cfg.start > cfg.end:

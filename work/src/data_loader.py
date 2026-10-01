@@ -655,13 +655,8 @@ def load_profile(path) -> dict:
 
 
 def _normalise_role(key: str) -> str:
-    key = key.strip()
-    if key.endswith("_file"):
-        key = key[:-5]
-    if key not in ROLE_CONFIG_KEYS:
-        raise ConfigError(f"--data-file: unknown source key {key!r}; allowed "
-                          f"{', '.join(sorted(ROLE_CONFIG_KEYS))} (DATA-008)")
-    return key
+    from .config import normalize_data_key
+    return normalize_data_key(key)
 
 
 def resolve_source(cfg, role: str) -> dict:

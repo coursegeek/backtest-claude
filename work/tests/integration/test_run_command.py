@@ -193,3 +193,24 @@ def test_cli_008_run_with_data_file_override(tmp_path):
     m = json.loads((out / "data_manifest.json").read_text())
     assert m["first_return_week"] == "1926-07-02" and m["common_calendar_gaps"] == ["1933-03-10"]
     assert str(copy) in json.dumps(m["sources"])
+
+
+def test_no_start_uses_first_week_with_complete_warmup():
+    """Q-025 (RESOLVED): without --start the first return week is the earliest week of the
+    common return range at which every active asset has its complete signal warm-up - here
+    gold (51 staged weeks before 1971-01-01, 55 required) - not a hard-coded date and not an
+    ERR-003 at the first common week."""
+    from src.config import ResolvedConfig as RC
+    from src.data_loader import load_role
+    c = RC("run", cli_layer={"allocation": {"targets": "stocks=0.4,gold=0.4,rf=0.2"},
+                             "run": {"end": "1975-12-31", "as_of_date": "2026-09-29"}})
+    res = run_portfolio(c, write=False)
+    gold = [k for k in load_role(c, "gold").keys()]
+    need = c.signal_params("gold").minimum_warmup_weeks
+    assert need == 55 and res.first_week == gold[need] == dt.date(1971, 1, 29)
+    assert res.common_range[0] < res.first_week
+    assert "Q-025" in res.prepared.first_week_rule
+    with pytest.raises(WarmupError, match="gold: available 51 < required 55"):
+        run_portfolio(RC("run", cli_layer={"allocation": {"targets": "stocks=0.4,gold=0.4,rf=0.2"},
+                                           "run": {"start": "1971-01-01", "end": "1975-12-31",
+                                                   "as_of_date": "2026-09-29"}}), write=False)
