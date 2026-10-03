@@ -43,18 +43,23 @@ DEFAULT_AS_OF = "2026-09-29"
 NORM019_EXAMPLE_AS_OF = "2026-09-22"
 
 FILES = OrderedDict([
-    ("stocks_signal", "US_STOCK_PRICE_WEEKLY_REAL_1919_2026.csv"),
+    ("stocks_signal", "US_STOCK_PRICE_WEEKLY_1885_2026.csv"),          # canonical (Q-004)
     ("stocks_return", "F-F_Research_Data_Factors_weekly.csv"),
     ("gold", "GOLD_REAL_weekly_1970_2026.csv"),
     ("btc", "BTC_REAL_weekly_2010_2026.csv"),
-    ("dividend", "SPX_dividend_return_weekly_shiller.csv"),
+    ("dividend", "SPX_dividend_return_weekly_1970_2026.csv"),         # canonical (Q-008)
     ("cpi", "CPIAUCNS.csv"),
     ("supplemental_schwert", "US_STOCK_PRICE_WEEKLY_schwert_1919_1962.csv"),
+])
+# Superseded staged proxies (kept in input/data for development compatibility; profiled only).
+SUPERSEDED = OrderedDict([
+    ("stocks_signal", ("US_STOCK_PRICE_WEEKLY_REAL_1919_2026.csv", "Q-004")),
+    ("dividend", ("SPX_dividend_return_weekly_shiller.csv", "Q-008")),
 ])
 
 # Contract values quoted from the specification.
 SPEC_SCHEMA = {
-    "stocks_signal": ["week_start", "price_index_continuous"],            # SCHEMA-001
+    "stocks_signal": ["week_start|week_end", "price_index_continuous"],   # SCHEMA-001
     "stocks_return": ["date", "Mkt-RF", "RF"],                            # SCHEMA-002
     "gold": ["week_end", "gold_pm_usd"],                                  # SCHEMA-003
     "btc": ["date", "price", "weekly_return", "close_date", "source_week_start"],  # SCHEMA-004
@@ -68,7 +73,8 @@ SPEC_DIVIDEND_ACTUAL_UNTIL = "2025-12-26"                 # SEM-007
 SPEC_FF_START = "1926-07-02"                              # SEM-002
 SPEC_GOLD_START_YEAR = 1968                               # SEM-003
 SPEC_STOCKS_SPLICE_YEAR = 1928                            # SEM-001
-SPEC_PARTIAL_STOCK_WEEK = "2026-09-21"                    # SEM-011 / NORM-019
+SPEC_PARTIAL_STOCK_WEEK = "2026-09-21"                    # SEM-011 / NORM-019 (week_start)
+SPEC_PARTIAL_STOCK_WEEK_END = "2026-09-25"                # SEM-011 week_end
 FF_HEADER_LINES_SPEC = 4                                  # SCHEMA-002 / NORM-014
 
 # Signal defaults (SIG-001, DEF-002, DEF-004, DEF-022..024) used by the warm-up formula NORM-010.
@@ -196,28 +202,35 @@ def audit_manifest(checks: Checks, profile: dict):
 def audit_stocks_signal(checks: Checks):
     role, name = "stocks_signal", FILES["stocks_signal"]
     header, rows, raw = read_csv(DATA / name)
-    starts = [d(r["week_start"]) for r in rows]
-    keys = [s + dt.timedelta(days=4) for s in starts]
+    keys = [d(r["week_end"]) for r in rows]
+    source_dates = [d(r["source_date"]) for r in rows]
     prices = [float(r["price_index_continuous"]) for r in rows]
     steps, gaps = step_gaps(keys)
+    segs = []
+    for r, k in zip(rows, keys):
+        if segs and segs[-1]["source"] == r["source"]:
+            segs[-1]["to_key"], segs[-1]["rows"] = k.isoformat(), segs[-1]["rows"] + 1
+        else:
+            segs.append(OrderedDict(source=r["source"], from_key=k.isoformat(), to_key=k.isoformat(), rows=1))
     prof = OrderedDict(
         file=name, sha256=sha256(DATA / name), bytes=len(raw), line_endings=line_endings(raw),
-        columns=header, rows=len(rows), date_column="week_start", date_encoding="ISO YYYY-MM-DD",
-        date_weekdays=weekday_counts(starts), first_week_start=starts[0].isoformat(),
-        last_week_start=starts[-1].isoformat(), first_friday_key=keys[0].isoformat(),
-        last_friday_key=keys[-1].isoformat(), step_days=steps, gaps=gaps,
-        duplicate_dates=[x.isoformat() for x in duplicates(starts)],
+        columns=header, rows=len(rows), date_column="week_end", date_encoding="ISO YYYY-MM-DD",
+        date_weekdays=weekday_counts(keys), source_date_weekdays=weekday_counts(source_dates),
+        first_friday_key=keys[0].isoformat(), last_friday_key=keys[-1].isoformat(),
+        last_source_date=source_dates[-1].isoformat(), step_days=steps, gaps=gaps,
+        duplicate_dates=[x.isoformat() for x in duplicates(keys)],
         non_positive_prices=sum(1 for p in prices if not p > 0),
-        min_price=fnum(min(prices)), max_price=fnum(max(prices)),
+        min_price=fnum(min(prices)), max_price=fnum(max(prices)), source_segments=segs,
+        source_date_outside_week=sum(1 for k, x in zip(keys, source_dates) if friday_key(x) != k),
     )
-    missing = [c for c in SPEC_SCHEMA[role] if c not in header]
+    has_cols = ("week_start" in header or "week_end" in header) and "price_index_continuous" in header
     checks.add("A-STK-001", role, name, "SCHEMA-001", "Minimal columns present",
-               ",".join(SPEC_SCHEMA[role]), ",".join(header), "PASS" if not missing else "FAIL")
-    checks.add("A-STK-002", role, name, "NORM-008;NORM-007",
-               "week_start is Monday so week_end=week_start+4 is the Friday key",
-               "all Monday", json.dumps(prof["date_weekdays"]),
-               "PASS" if set(prof["date_weekdays"]) == {"Mon"} else "FAIL")
-    checks.add("A-STK-003", role, name, "NORM-002", "No duplicate week_start", "0 duplicates",
+               ",".join(SPEC_SCHEMA[role]), ",".join(header), "PASS" if has_cols else "FAIL")
+    checks.add("A-STK-002", role, name, "NORM-007;SCHEMA-001",
+               "week_end is the Friday key of the calendar week", "all Friday",
+               json.dumps(prof["date_weekdays"]),
+               "PASS" if set(prof["date_weekdays"]) == {"Fri"} else "FAIL")
+    checks.add("A-STK-003", role, name, "NORM-002", "No duplicate week_end", "0 duplicates",
                str(len(prof["duplicate_dates"])), "PASS" if not prof["duplicate_dates"] else "FAIL")
     checks.add("A-STK-004", role, name, "NORM-003;NORM-005;SIG-003;NORM-010",
                "Weekly continuity of signal price history", "no missing Friday keys",
@@ -227,54 +240,63 @@ def audit_stocks_signal(checks: Checks):
                "History start vs default filename/TEST-023",
                "file name implies 1885; TEST-023 needs signal-only from 1920",
                f"first Friday key {keys[0].isoformat()}", "WARN", "Q-011")
-    has_partial = any(s.isoformat() == SPEC_PARTIAL_STOCK_WEEK for s in starts)
+    last = rows[-1]
+    has_partial = last["week_end"] == SPEC_PARTIAL_STOCK_WEEK_END and \
+        friday_key(d(SPEC_PARTIAL_STOCK_WEEK)) == keys[-1]
     checks.add("A-STK-006", role, name, "SEM-011;NORM-019;TEST-051",
                "Partial last week row described by SEM-011 exists in file",
-               f"week_start {SPEC_PARTIAL_STOCK_WEEK} present",
-               "present" if has_partial else f"absent; last week_start {starts[-1].isoformat()}",
+               f"week {SPEC_PARTIAL_STOCK_WEEK}..{SPEC_PARTIAL_STOCK_WEEK_END} present",
+               f"last row week_end {last['week_end']} source_date {last['source_date']}",
                "PASS" if has_partial else "WARN", "" if has_partial else "Q-010")
     checks.add("A-STK-007", role, name, "NORM-006", "All prices finite and positive",
                "0 invalid", str(prof["non_positive_prices"]),
                "PASS" if prof["non_positive_prices"] == 0 else "FAIL")
-
-    # Segment provenance: compare with the supplemental Schwert file.
-    _, srows, _ = read_csv(DATA / FILES["supplemental_schwert"])
-    sch = {r["week_start"]: r["price_index_continuous"] for r in srows}
-    sch_last = max(sch)
-    identical_until = None
-    first_diff = None
-    for r in rows:
-        ws = r["week_start"]
-        if ws not in sch:
-            if first_diff is None and identical_until is not None and ws <= sch_last:
-                first_diff = ws
-            continue
-        if sch[ws] == r["price_index_continuous"] and first_diff is None:
-            identical_until = ws
-        elif first_diff is None:
-            first_diff = ws
-    prof["schwert_overlap"] = OrderedDict(
-        schwert_file=FILES["supplemental_schwert"], identical_until_week_start=identical_until,
-        first_different_week_start=first_diff,
-        inferred_segments=[
-            {"source": "Schwert (identical to supplemental file)",
-             "week_start_from": starts[0].isoformat(), "week_start_to": identical_until},
-            {"source": "non-Schwert (presumably SPX, rebased)",
-             "week_start_from": first_diff, "week_start_to": starts[-1].isoformat()},
-        ],
-        segment_column_in_file=any(c.lower() in {"source", "segment"} for c in header),
-    )
-    splice_year = int(first_diff[:4]) if first_diff else None
+    schwert = [s for s in segs if s["source"] == "Schwert"]
+    spx = [s for s in segs if s["source"] == "SPX"]
+    first_1928 = friday_key(dt.date(SPEC_STOCKS_SPLICE_YEAR, 1, 2))
+    splice_ok = (len(segs) == 2 and [x["source"] for x in segs] == ["Schwert", "SPX"]
+                 and d(schwert[0]["to_key"]) < first_1928 and d(spx[0]["from_key"]) == first_1928)
     checks.add("A-STK-008", role, name, "SEM-001",
-               "Schwert->SPX splice point", f"SPX from {SPEC_STOCKS_SPLICE_YEAR}",
-               f"identical to Schwert until {identical_until}; differs from {first_diff}",
-               "FAIL" if splice_year != SPEC_STOCKS_SPLICE_YEAR else "PASS", "Q-004")
+               "Schwert->SPX splice point", f"Schwert before {SPEC_STOCKS_SPLICE_YEAR}, SPX from {first_1928}",
+               "; ".join(f"{x['source']} {x['from_key']}..{x['to_key']} ({x['rows']})" for x in segs),
+               "PASS" if splice_ok else "FAIL", "Q-004")
     checks.add("A-STK-009", role, name, "SEM-001;REP-008",
                "File carries per-row source/segment metadata for the manifest",
-               "segment source and range recoverable", "no source/segment column",
-               "FAIL" if not prof["schwert_overlap"]["segment_column_in_file"] else "PASS", "Q-004")
+               "segment source and range recoverable", "columns source, source_date",
+               "PASS" if {"source", "source_date"} <= set(header) else "FAIL", "Q-004")
+    # Schwert segment versus the supplemental Schwert derivative (string identity of prices).
+    _, srows, _ = read_csv(DATA / FILES["supplemental_schwert"])
+    sch = {friday_key(d(r["week_start"])): r["price_index_continuous"] for r in srows}
+    diff = [r["week_end"] for r in rows if r["source"] == "Schwert"
+            and sch.get(d(r["week_end"])) != r["price_index_continuous"]]
+    checks.add("A-STK-010", role, name, "SEM-001",
+               "Schwert segment equals the supplemental Schwert file", "0 differing prices",
+               f"{len(diff)} differing of {schwert[0]['rows'] if schwert else 0}",
+               "PASS" if not diff else "FAIL", "Q-004")
+    checks.add("A-STK-011", role, name, "NORM-013;NORM-019",
+               "source_date inside the calendar week of week_end (metadata only)", "0 outside",
+               f"{prof['source_date_outside_week']}; source_date weekdays {json.dumps(prof['source_date_weekdays'])}",
+               "PASS" if prof["source_date_outside_week"] == 0 else "FAIL")
+    prof["schwert_overlap"] = OrderedDict(
+        schwert_file=FILES["supplemental_schwert"], differing_schwert_weeks=diff,
+        segment_column_in_file=True)
     series = {"keys": keys, "prices": dict(zip(keys, prices))}
     return prof, series
+
+
+def audit_superseded(checks: Checks) -> OrderedDict:
+    """The superseded staged stock-signal and dividend proxies: profiled for history only."""
+    out = OrderedDict()
+    for role, (name, qid) in SUPERSEDED.items():
+        header, rows, raw = read_csv(DATA / name)
+        date_col = "week_start" if "week_start" in header else "date"
+        out[role] = OrderedDict(file=name, sha256=sha256(DATA / name), rows=len(rows), columns=header,
+                                first_date=rows[0][date_col], last_date=rows[-1][date_col])
+        checks.add(f"A-STG-{role}", role, name, "DATA-001" if role == "stocks_signal" else "DATA-007",
+                   "Superseded staged proxy (not used by the default resolution)",
+                   f"canonical {FILES[role]} used", f"{len(rows)} rows {rows[0][date_col]}..{rows[-1][date_col]}",
+                   "INFO", qid)
+    return out
 
 
 def parse_ff(path: Path):
@@ -546,6 +568,11 @@ def audit_btc(checks: Checks, ff_series, as_of: dt.date):
     return prof, {"keys": keys, "prices": dict(zip(keys, prices)), "close": dict(zip(keys, close))}
 
 
+def fridays_in_year(y: int) -> int:
+    first = dt.date(y, 1, 1) + dt.timedelta(days=(4 - dt.date(y, 1, 1).weekday()) % 7)
+    return len(range(0, (dt.date(y, 12, 31) - first).days + 1, 7))
+
+
 def audit_dividend(checks: Checks, stock_series, ff_series):
     role, name = "dividend", FILES["dividend"]
     header, rows, raw = read_csv(DATA / name)
@@ -557,69 +584,77 @@ def audit_dividend(checks: Checks, stock_series, ff_series):
         calc = float(r["dividend_points"]) / float(r["spx_close_prev"])
         rel_err.append(abs(dr - calc) / max(abs(dr), 1e-300))
     status = Counter(r["status"] for r in rows)
-    by_month = {}
-    for r in rows:
-        by_month.setdefault(r["date"][:7], set()).add(r["dividend_return"])
-    const_months = sum(1 for v in by_month.values() if len(v) == 1)
+    blocks = []
+    for x, r in zip(dates, rows):
+        if blocks and blocks[-1][0] == r["status"]:
+            blocks[-1][2] = x.isoformat()
+        else:
+            blocks.append([r["status"], x.isoformat(), x.isoformat()])
+    smooth_err = max(abs(float(r["dividend_points"]) - float(r["trailing_dps_points"]) / fridays_in_year(x.year))
+                     / float(r["dividend_points"]) for x, r in zip(dates, rows))
     sp = stock_series["prices"]
     link_n, link_exact, link_missing = 0, 0, []
     for x, r in zip(dates, rows):
         prev = x - dt.timedelta(days=7)
-        if prev in sp:
+        if prev in sp and x in sp:
             link_n += 1
-            if abs(float(r["spx_close_prev"]) / sp[prev] - 1) < 1e-12:
+            if float(r["spx_close_prev"]) == sp[prev] and float(r["spx_close"]) == sp[x]:
                 link_exact += 1
         else:
             link_missing.append(x.isoformat())
     ff_keys = set(ff_series["keys"])
     missing_cols = [c for c in SPEC_SCHEMA[role] if c not in header]
     lo, hi = SPEC_DIVIDEND_RANGE
+    year_bad = sum(1 for x, r in zip(dates, rows) if int(r["year"]) != x.year)
     prof = OrderedDict(
         file=name, sha256=sha256(DATA / name), bytes=len(raw), line_endings=line_endings(raw),
         columns=header, missing_spec_columns=missing_cols, rows=len(rows),
         date_encoding="ISO YYYY-MM-DD", date_weekdays=weekday_counts(dates),
         first_date=dates[0].isoformat(), last_date=dates[-1].isoformat(),
         step_days=steps, gaps=gaps, duplicate_dates=[x.isoformat() for x in duplicates(dates)],
-        status_counts=dict(status), formula_max_rel_error=fnum(max(rel_err), 3),
-        months=len(by_month), months_with_constant_dividend_return=const_months,
-        spx_close_prev_linked_to_stock_index=f"{link_exact}/{link_n}",
+        status_counts=dict(status), status_blocks=blocks, formula_max_rel_error=fnum(max(rel_err), 3),
+        year_mismatches=year_bad, smoothing_max_rel_error=fnum(smooth_err, 3),
+        spx_close_linked_to_stock_index=f"{link_exact}/{link_n}",
         rows_without_stock_index_prev_week=link_missing,
         rows_not_in_ff_calendar=[x.isoformat() for x in dates
                                  if ff_series["keys"][0] <= x <= ff_series["keys"][-1] and x not in ff_keys],
-        rows_from_1970_01_02=sum(1 for x in dates if x >= d(lo)),
         ff_weeks_after_last_dividend=sum(1 for k in ff_series["keys"] if k > dates[-1]),
     )
     checks.add("A-DIV-001", role, name, "SCHEMA-005;ERR-002", "Columns listed in SCHEMA-005",
-               ",".join(SPEC_SCHEMA[role]), "missing " + ",".join(missing_cols),
-               "FAIL" if missing_cols else "PASS", "Q-008")
+               ",".join(SPEC_SCHEMA[role]), ",".join(header),
+               "PASS" if header == SPEC_SCHEMA[role] else "FAIL", "Q-008")
     checks.add("A-DIV-002", role, name, "SEM-007;DIV-012;TEST-038", "Dates are Friday",
                "all Friday", json.dumps(prof["date_weekdays"]),
                "PASS" if set(prof["date_weekdays"]) == {"Fri"} else "FAIL")
     checks.add("A-DIV-003", role, name, "SEM-007;DIV-012;TEST-038;NORM-003", "Weekly continuity",
-               "no gaps", str(len(gaps)), "PASS" if not gaps else "FAIL")
+               "no gaps, no duplicates", f"{len(gaps)} gaps, {len(prof['duplicate_dates'])} duplicates",
+               "PASS" if not gaps and not prof["duplicate_dates"] else "FAIL")
     checks.add("A-DIV-004", role, name, "SEM-007;TEST-038", "Range", f"{lo}..{hi}",
-               f"{dates[0].isoformat()}..{dates[-1].isoformat()} "
-               f"({prof['ff_weeks_after_last_dividend']} FF weeks after last dividend row)",
-               "FAIL", "Q-009")
+               f"{dates[0].isoformat()}..{dates[-1].isoformat()} ({len(rows)} rows; "
+               f"{prof['ff_weeks_after_last_dividend']} FF weeks after last dividend row)",
+               "PASS" if (dates[0].isoformat(), dates[-1].isoformat()) == (lo, hi) else "FAIL", "Q-009")
+    expected_blocks = [["actual", lo, SPEC_DIVIDEND_ACTUAL_UNTIL], ["estimate", "2026-01-02", hi]]
     checks.add("A-DIV-005", role, name, "SEM-007;DIV-011", "status values",
                f"actual until {SPEC_DIVIDEND_ACTUAL_UNTIL}, estimate in 2026",
-               json.dumps(prof["status_counts"]), "FAIL", "Q-008")
+               json.dumps(blocks) + " " + json.dumps(prof["status_counts"]),
+               "PASS" if blocks == expected_blocks else "FAIL", "Q-008")
     checks.add("A-DIV-006", role, name, "SCHEMA-005;DIV-012;SEM-007;TEST-038",
                "dividend_return == dividend_points/spx_close_prev", f"rel err <= {TOL_REL_DIVIDEND}",
                f"max rel err {prof['formula_max_rel_error']}",
                "PASS" if max(rel_err) <= TOL_REL_DIVIDEND else "FAIL")
     checks.add("A-DIV-007", role, name, "DIV-009;SEM-007",
                "Smoothing granularity", "smoothed weekly share of annual/trailing DPS",
-               f"dividend_return constant within month for {const_months}/{len(by_month)} months "
-               "(monthly yield, Shiller-style)", "WARN", "Q-008")
-    checks.add("A-DIV-008", role, name, "NORM-007;DIV-005",
-               "spx_close_prev equals stock signal index at previous Friday key",
-               "alignment evidence", f"exact {link_exact}/{link_n}; no prior index week {link_missing}",
-               "PASS" if link_exact == link_n else "WARN")
+               f"dividend_points = trailing_dps_points / Fridays in year, max rel err {prof['smoothing_max_rel_error']}",
+               "PASS" if smooth_err <= TOL_REL_DIVIDEND else "FAIL", "Q-008")
+    checks.add("A-DIV-008", role, name, "NORM-007;DIV-005;SEM-001",
+               "spx_close/spx_close_prev equal the stock signal index at the Friday key / previous key",
+               "exact", f"exact {link_exact}/{link_n}; no prior index week {link_missing}",
+               "PASS" if link_exact == link_n == len(rows) else "FAIL")
     checks.add("A-DIV-009", role, name, "NORM-007;NORM-011",
                "Dividend weeks outside FF calendar", "none",
-               ",".join(prof["rows_not_in_ff_calendar"]) or "none",
-               "INFO")
+               ",".join(prof["rows_not_in_ff_calendar"]) or "none", "INFO")
+    checks.add("A-DIV-010", role, name, "SCHEMA-005", "year == date.year", "0 mismatches",
+               str(year_bad), "PASS" if not year_bad else "FAIL")
     series = {"keys": dates, "div": {x: float(r["dividend_return"]) for x, r in zip(dates, rows)}}
     return prof, series
 
@@ -881,7 +916,7 @@ def main():
     profile = OrderedDict(audit_tool="work/tools/audit_inputs.py", as_of_date=as_of.isoformat(),
                           audit_assumptions=[
                               "Friday key = Monday-Sunday calendar week Friday (NORM-007).",
-                              "week_start files (stocks, gold, BTC date) mapped with +4 days (NORM-008 analogue).",
+                              "week_start files (gold, BTC date) mapped with +4 days (NORM-008 analogue); the canonical stock file is week_end keyed.",
                               "First return week = first Friday key >= --start (see Q-014).",
                               "Warm-up = ma + confirm + max(delay) contiguous weeks before first return week (NORM-010).",
                               "Dividend file needed only if stocks active, tax profile != none, smoothed_weekly (Q-009).",
@@ -893,6 +928,7 @@ def main():
     gld_prof, gld = audit_gold(checks, ff)
     btc_prof, btc = audit_btc(checks, ff, as_of)
     div_prof, div = audit_dividend(checks, stk, ff)
+    superseded = audit_superseded(checks)
     nominal = audit_nominal_vs_real(checks, stk, ff, div, cpi_series)
     _, sch_rows, sch_raw = read_csv(DATA / FILES["supplemental_schwert"])
     profile["sources"] = OrderedDict([
@@ -903,6 +939,7 @@ def main():
             rows=len(sch_rows), first_week_start=sch_rows[0]["week_start"],
             last_week_start=sch_rows[-1]["week_start"], default_config_key="none (DATA_MAP)")),
     ])
+    profile["superseded_staged_proxies"] = superseded
     profile["nominal_vs_real"] = nominal
 
     completeness = OrderedDict()

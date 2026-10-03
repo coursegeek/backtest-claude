@@ -1,0 +1,135 @@
+{
+  "schema": "backtest-v2-data-provenance/1",
+  "file": "US_STOCK_PRICE_WEEKLY_1885_2026.csv",
+  "role": "stocks_price",
+  "config_key": "data.stocks_price_file",
+  "data_status": "canonical",
+  "requirement_ids": [
+    "DATA-001",
+    "SCHEMA-001",
+    "SEM-001",
+    "SEM-011",
+    "NORM-019",
+    "REP-008"
+  ],
+  "question_ids": [
+    "Q-004",
+    "Q-011",
+    "Q-012",
+    "Q-010"
+  ],
+  "final": {
+    "sha256": "af1da27aa7d8dc689cb5d2f57f4a9c37e70f95fab18514a5f3087b98078987bd",
+    "bytes": 251574,
+    "line_endings": "CRLF",
+    "columns": [
+      "week_end",
+      "price_index_continuous",
+      "source",
+      "source_date"
+    ],
+    "rows": 5569,
+    "first_week_end": "1920-01-02",
+    "last_week_end": "2026-09-25",
+    "source_counts": {
+      "Schwert": 418,
+      "SPX": 5151
+    }
+  },
+  "handoff": {
+    "received_as": "US_STOCK_PRICE_WEEKLY_1885_2026_raw_verified.csv",
+    "received_sha256": "af1da27aa7d8dc689cb5d2f57f4a9c37e70f95fab18514a5f3087b98078987bd",
+    "staged_as": "input/data/US_STOCK_PRICE_WEEKLY_1885_2026.csv"
+  },
+  "raw_inputs": [
+    {
+      "name": "stkdatd.zip",
+      "sha256": "34841bb769160902e088b3cfe4ed34704cd1190db2811024f8f01fce03f71289",
+      "archive_member": "STKDATD.DAT",
+      "archive_member_sha256": "4b052585e1dfc146eb3c2fcdf71664ed85e264920b983b6d131971190f2bd451",
+      "description": "G. William Schwert daily U.S. stock index returns",
+      "raw_rows": 22474,
+      "raw_range": "1885-02-17..1962-07-02",
+      "field_used": "capital gain return",
+      "in_repository": false
+    },
+    {
+      "name": "SP_DLY_SPX, 1W(1).csv",
+      "sha256": "03377c10c943be6a7305b39989ca733d9ee5b6d979a37da1cc1557c85e80b66f",
+      "description": "TradingView SPX export, interval 1W",
+      "field_used": "weekly Close",
+      "in_repository": false
+    }
+  ],
+  "raw_hashes_verified_in_repository": false,
+  "raw_hashes_note": "Raw provider files are not redistributed in this repository; their SHA-256 values are declared by the data handoff and cannot be re-verified here. The final CSV is verified by work/tools/verify_canonical_data.py.",
+  "construction": {
+    "schwert": {
+      "segment": "1920-01-02..1927-12-30",
+      "price_only": "built only from the capital gain return (not total return, not dividend yield)",
+      "index": "index_0 = 100; index_t = index_(t-1) * (1 + capital_gain_return_t)",
+      "weekly": "last available market observation of each Monday-Sunday calendar week -> Friday week_key (week_end)",
+      "source_date": "date of that last daily observation (Saturday when the market traded on Saturday)",
+      "reproduced_from_raw": "segment rebuilt directly from STKDATD.DAT is identical to the earlier V2 Schwert derivative to 10 decimals (handoff statement); here: every price_index_continuous string of 1920-01-02..1927-12-30 is identical to input/data/US_STOCK_PRICE_WEEKLY_schwert_1919_1962.csv (week_start + 4 days)"
+    },
+    "spx": {
+      "segment": "1928-01-06..2026-09-25",
+      "field": "TradingView SPX 1W bar Close",
+      "weekly": "weekly bar timestamp -> Friday of the same Monday-Sunday calendar week (week_end)",
+      "source_date": "TradingView weekly bar timestamp (first trading day of the week); the close is the last trading day of that week",
+      "daily_data": "not used"
+    },
+    "splice": {
+      "rule": "Schwert for weeks before 1928, SPX from the first 1928 week (SEM-001)",
+      "last_schwert_week": "1927-12-30",
+      "first_spx_week": "1928-01-06",
+      "rebase_anchor_week": "1927-12-30",
+      "anchor_schwert_value": "410.4598610098",
+      "anchor_spx_raw_close": "17.66",
+      "rebase_factor": "23.2423477355492638731596828992",
+      "rebase_factor_float": 23.242347735549266,
+      "formula": "rebased_spx = raw_spx_close * rebase_factor (from 1928-01-06)",
+      "anchor_row": "1927-12-30 stays in the output as Schwert; it is used only for rebasing"
+    }
+  },
+  "segments": [
+    {
+      "source": "Schwert",
+      "first_week_end": "1920-01-02",
+      "last_week_end": "1927-12-30",
+      "rows": 418,
+      "first_source_date": "1920-01-03",
+      "last_source_date": "1927-12-31"
+    },
+    {
+      "source": "SPX",
+      "first_week_end": "1928-01-06",
+      "last_week_end": "2026-09-25",
+      "rows": 5151,
+      "first_source_date": "1928-01-02",
+      "last_source_date": "2026-09-21"
+    }
+  ],
+  "known_gaps": [
+    {
+      "missing_week_end": "1933-03-10",
+      "previous": "1933-03-03",
+      "next": "1933-03-17",
+      "reason": "common historical gap (March 1933 bank holiday) also absent from Fama/French",
+      "handling": "not forward-filled, not synthesised (Q-012 policies apply)"
+    }
+  ],
+  "last_row": {
+    "week_end": "2026-09-25",
+    "source_date": "2026-09-21",
+    "note": "SEM-011/NORM-019: the week enters any calculation only when as_of_date >= its Friday week_end"
+  },
+  "start_note": "File name says 1885 (DATA-001 default name); the stock signal starts 1920-01-02 by adjudication Q-011; not extended to 1885.",
+  "summary": {
+    "segments": "Schwert 1920-01-02..1927-12-30 (418 rows); SPX 1928-01-06..2026-09-25 (5151 rows)",
+    "rebase": "anchor 1927-12-30: Schwert 410.4598610098 / SPX raw close 17.66 = 23.2423477355492638731596828992",
+    "schwert_method": "price-only index from Schwert capital gain return; last observation of the Monday-Sunday week -> Friday",
+    "spx_method": "TradingView SPX 1W Close; bar timestamp -> Friday of the same calendar week",
+    "raw_sha256": "stkdatd.zip 34841bb7...71289; STKDATD.DAT 4b052585...2bd451; SP_DLY_SPX, 1W(1).csv 03377c10...80b66f"
+  }
+}

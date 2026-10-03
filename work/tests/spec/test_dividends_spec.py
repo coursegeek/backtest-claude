@@ -26,6 +26,11 @@ def test_exact_requires_cash_file_smoothed_accepts_file(tmp_path):
     check_dividend_mode("exact", "individual_pl", False, str(tmp_path / "cash.csv"))
     smoothed = load_dividend(STAGED / "SPX_dividend_return_weekly_shiller.csv", adapter="shiller_proxy")
     assert len(smoothed.points) == 5218
+    # the attached canonical smoothed file has status=actual rows and is still never exact
+    canonical = STAGED / "SPX_dividend_return_weekly_1970_2026.csv"
+    with pytest.raises(DividendModeError):
+        load_dividend_cash(canonical)
+    assert {p.status for p in load_dividend(canonical).points} == {"actual", "estimate"}
 
 
 def test_dividend_reinvest_only():

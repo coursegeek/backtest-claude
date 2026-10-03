@@ -1,0 +1,114 @@
+{
+  "schema": "backtest-v2-data-provenance/1",
+  "file": "SPX_dividend_return_weekly_1970_2026.csv",
+  "role": "dividend",
+  "config_key": "data.dividend_file",
+  "data_status": "canonical",
+  "requirement_ids": [
+    "DATA-007",
+    "SCHEMA-005",
+    "SEM-007",
+    "TEST-038",
+    "DIV-001",
+    "DIV-009",
+    "DIV-011",
+    "DIV-012"
+  ],
+  "question_ids": [
+    "Q-008",
+    "Q-009"
+  ],
+  "final": {
+    "sha256": "a62191993c42a5692072323d34947d2095b0e5ca162ca63c23ed91ebba7e8cf5",
+    "bytes": 408388,
+    "line_endings": "CRLF",
+    "columns": [
+      "date",
+      "dividend_return",
+      "dividend_points",
+      "spx_close_prev",
+      "spx_close",
+      "year",
+      "annual_yield_pct",
+      "trailing_dps_points",
+      "status"
+    ],
+    "rows": 2960,
+    "first_date": "1970-01-02",
+    "last_date": "2026-09-18",
+    "status_counts": {
+      "actual": 2922,
+      "estimate": 38
+    },
+    "status_ranges": {
+      "actual": {
+        "first": "1970-01-02",
+        "last": "2025-12-26"
+      },
+      "estimate": {
+        "first": "2026-01-02",
+        "last": "2026-09-18"
+      }
+    }
+  },
+  "handoff": {
+    "received_as": "SPX_dividend_return_weekly_1970_2026_candidate.csv",
+    "received_sha256": "a62191993c42a5692072323d34947d2095b0e5ca162ca63c23ed91ebba7e8cf5",
+    "staged_as": "input/data/SPX_dividend_return_weekly_1970_2026.csv"
+  },
+  "raw_inputs": [
+    {
+      "name": "ie_data(1).xls",
+      "sha256": "044196dafe44c3030b2facbdea023975b3f6aa68b4e52f8f9bafc403e19589c1",
+      "description": "Robert J. Shiller U.S. stock market data, sheet Data",
+      "fields_used": [
+        "Date",
+        "P",
+        "D"
+      ],
+      "D_semantics": "annual/trailing dividend per share (monthly series)",
+      "D_available_through": "2026-06",
+      "D_2026_06": "81.7032",
+      "in_repository": false
+    }
+  ],
+  "raw_hashes_verified_in_repository": false,
+  "raw_hashes_note": "ie_data.xls is not redistributed in this repository; its SHA-256 is declared by the data handoff. The final CSV is verified by work/tools/verify_canonical_data.py.",
+  "stock_signal": {
+    "file": "US_STOCK_PRICE_WEEKLY_1885_2026.csv",
+    "sha256": "af1da27aa7d8dc689cb5d2f57f4a9c37e70f95fab18514a5f3087b98078987bd",
+    "use": "spx_close = canonical stock signal price at date; spx_close_prev = canonical stock signal price at the previous Friday"
+  },
+  "construction": {
+    "units": "trailing_dps_points = Shiller_D * SPX rebase factor 23.2423477355492638731596828992 (unit change only; the yield is scale invariant)",
+    "annual_yield_pct": "Shiller_D / Shiller_P * 100 for the month of date (computed from the Shiller fields, not from the rebased price)",
+    "trailing_dps_points": "monthly trailing D (month of date) in the rebased SPX units",
+    "dividend_points": "trailing_dps_points / number of Fridays in the calendar year of date (52 or 53)",
+    "dividend_return": "dividend_points / spx_close_prev",
+    "economic_definition": "equals the DIV-009 fallback spread_annual_dps; the runtime keeps tax.dividend_approx_method=use_supplied_dividend_return",
+    "status": "actual for 1970-01-02..2025-12-26; estimate for every 2026 row (quality of the annual/trailing dividend, not a cash payment date)"
+  },
+  "estimate_2026": {
+    "status": "estimate (all of 2026); never relabelled actual",
+    "shiller_D_months_2026": "2026-01..2026-06 from ie_data.xls",
+    "missing_months": "2026-07..2026-09 (no Shiller D)",
+    "q3_2025_actual_dividend_points": "19.81",
+    "q3_2026_estimate_dividend_points": "21.13",
+    "q3_2026_estimate_source": "data handoff forecast (index points); not a Shiller actual",
+    "ttm_2026_06": "81.7032",
+    "method": "TTM Sep 2026 = TTM Jun 2026 - Q3 2025 actual + Q3 2026 estimate = 81.7032 - 19.81 + 21.13 = 83.0232; Jul and Aug linear interpolation",
+    "monthly_ttm_D": {
+      "2026-06": "81.7032",
+      "2026-07": "82.1432",
+      "2026-08": "82.5832",
+      "2026-09": "83.0232"
+    }
+  },
+  "summary": {
+    "range": "1970-01-02..2026-09-18; 2960 weekly Friday rows; no gaps",
+    "status": "actual 1970-01-02..2025-12-26 (2922); estimate 2026-01-02..2026-09-18 (38)",
+    "estimate_2026": "Q3 2026 estimate = 21.13 index points; TTM Sep 2026 = TTM Jun 2026 (81.7032) - Q3 2025 actual (19.81) + Q3 2026 estimate (21.13) = 83.0232; Jul/Aug linear interpolation",
+    "smoothing": "dividend_points = trailing_dps_points / Fridays in calendar year; dividend_return = dividend_points / spx_close_prev",
+    "raw_sha256": "ie_data(1).xls 044196da...589c1 (fields Date, P, D)"
+  }
+}

@@ -29,16 +29,16 @@ Core engine nie został napisany; powstały wyłącznie narzędzia audytowe, rap
 | SHOULD | 27 |
 | Pytania/konflikty ogółem | 49 w audycie, 50 po dodaniu Q-050 (sesja 2), 52 po dodaniu Q-051/Q-052 (sesja 5) |
 | **BLOCKER** (severity z audytu) | **6** (Q-002, Q-004, Q-005, Q-008, Q-012, Q-020) |
-| — po adjudykacji: DATA BLOCKER | 3 (Q-002, Q-004, Q-008) |
-| — po adjudykacji: RESOLVED | 3 blokery (Q-005, Q-012, Q-020) + Q-006 |
+| — po adjudykacji: DATA BLOCKER | 3 (Q-002, Q-004, Q-008) → 1 po sesji 15 (Q-002) |
+| — po adjudykacji: RESOLVED | 3 blokery (Q-005, Q-012, Q-020) + Q-006; sesja 15: Q-004, Q-008 (dane kanoniczne) |
 | **MAJOR** | **20** |
 | MINOR | 23 (+ Q-050, Q-051, Q-052) |
 | MUST zmapowane bez blokera (`MAPPED`) | 340 w audycie → 347 po adjudykacji |
-| MUST zablokowane decyzją (`BLOCKED`) | 12 w audycie → 5 po adjudykacji (tylko DATA BLOCKER) |
-| MUST `PASS` | 0 w audycie; 139 po sesji 2; 165 po sesji 3; 177 po sesji 4; 217 po sesji 5; 225 po sesji 6; 262 po sesji 7; 287 po sesji 8; 290 po sesji 9; 304 po sesji 10; 318 po sesji 11; 339 po sesji 12; 345 po sesji 13; 347 po sesji 14 (sekcja 13) |
+| MUST zablokowane decyzją (`BLOCKED`) | 12 w audycie → 5 po adjudykacji (tylko DATA BLOCKER) → 1 po sesji 15 (SEM-003) |
+| MUST `PASS` | 0 w audycie; 139 po sesji 2; 165 po sesji 3; 177 po sesji 4; 217 po sesji 5; 225 po sesji 6; 262 po sesji 7; 287 po sesji 8; 290 po sesji 9; 304 po sesji 10; 318 po sesji 11; 339 po sesji 12; 345 po sesji 13; 347 po sesji 14; 351 po sesji 15 (sekcja 13) |
 | SHOULD proponowane do odroczenia | 1 (ERR-007 cache) |
-| Kontrole danych | 58: 27 PASS, 12 FAIL, 14 WARN, 5 INFO |
-| Scenariusze AB + przykłady CLI | 20: 10 wykonalnych, 10 wymaga decyzji |
+| Kontrole danych | 58 w audycie: 27 PASS, 12 FAIL, 14 WARN, 5 INFO; sesja 15 (pliki kanoniczne): 63: 39 PASS, 7 FAIL, 10 WARN, 7 INFO (FAIL tylko złoto Q-002/Q-003 i surowy format BTC Q-005/Q-006) |
+| Scenariusze AB + przykłady CLI | 20: 10 wykonalnych, 10 wymaga decyzji; sesja 15: 13 / 7 (S05, S06, CLI-005 wykonalne) |
 
 Definicje: **BLOCKER** — wymaganie MUST (lub jego test) nie może przejść na dostarczonych
 danych/specyfikacji bez decyzji użytkownika lub poprawki; **MAJOR** — istnieje rozsądna
@@ -56,6 +56,8 @@ o małym wpływie, propozycja zostanie zastosowana i udokumentowana.
 | dividend | `SPX_dividend_return_weekly_shiller.csv` | 5218; 1926-07-02..2026-06-26 | piątek | Brak 4 z 9 kolumn SCHEMA-005; **100% status=estimate**; wartości stałe w miesiącu (Shiller); wzór dokładny (2e-16); `spx_close_prev` = indeks akcji z poprzedniego piątku 5217/5217; kończy się 9 tygodni przed FF |
 | cpi | `CPIAUCNS.csv` | 1364; 1913-01..2026-08 | 1. dzień miesiąca | Zgodny ze spec; jedyny brak 2025-10 (zgodnie z SEM-010) |
 | supplemental | `US_STOCK_PRICE_WEEKLY_schwert_1919_1962.csv` | 2218; 1919-12-29..1962-07-02 | `week_start` | Bez klucza configu; posłużył jako dowód punktu splice |
+| stocks signal (kanoniczny, sesja 15) | `US_STOCK_PRICE_WEEKLY_1885_2026.csv` | 5569; 1920-01-02..2026-09-25 | `week_end` (pt) + `source`, `source_date` | Schwert 1920-01-02..1927-12-30 (418), SPX 1928-01-06..2026-09-25 (5151) × 23.2423477355492638731596828992 (anchor 1927-12-30); jedyna luka 1933-03-10; ostatni wiersz = tydzień SEM-011 (source_date 2026-09-21); segment Schwert identyczny z plikiem supplemental |
+| dividend (kanoniczny, sesja 15) | `SPX_dividend_return_weekly_1970_2026.csv` | 2960; 1970-01-02..2026-09-18 | piątek | Dokładnie SCHEMA-005; bez luk; wzór z błędem 0.0; actual do 2025-12-26 (2922), estimate 2026 (38); `spx_close(_prev)` = kanoniczny sygnał akcji; `dividend_points = trailing_dps_points / piątki roku` |
 
 Pozytywne potwierdzenia (PASS): zgodność SHA256; brak duplikatów we wszystkich plikach; zwroty
 złota i BTC równe ilorazom cen; `dividend_return = dividend_points/spx_close_prev`; klucze
@@ -76,6 +78,7 @@ specyfikacji dotyczy kompletności BTC przy `as_of` w piątek/sobotę (Q-007).
 2. **Q-004 — splice sygnału akcji w 1962, nie w 1928; brak metadanych segmentów** (SEM-001).
    Propozycja: jawnie zadeklarowane segmenty w konfiguracji danych V2 (Schwert zweryfikowany
    bajt-w-bajt do 1962-06-25) + ostrzeżenie. Decyzja: poprawka spec albo nowy plik.
+   **Sesja 15: RESOLVED nowym plikiem kanonicznym (splice 1928, kolumny source/source_date).**
 3. **Q-005 — konwencja daty BTC (poniedziałek, close +6) vs spec (piątek, close +2)**
    (SCHEMA-004, SEM-008, TEST-039). Propozycja: jawny parametr `calendar.btc_date_convention`,
    `week_key = date + 4` w obrębie tego samego tygodnia (bez przesunięcia między tygodniami).
@@ -83,6 +86,7 @@ specyfikacji dotyczy kompletności BTC przy `as_of` w piątek/sobotę (Q-007).
 4. **Q-008 — plik dywidend: 5 zamiast 9 kolumn, wszystkie statusy `estimate`, miesięczne
    wygładzenie** (SCHEMA-005, SEM-007, DIV-011, DIV-009). Propozycja: 5 kolumn wymaganych,
    4 opcjonalne, status przenoszony dosłownie; `spread_annual_dps` odroczone.
+   **Sesja 15: RESOLVED nowym plikiem kanonicznym (pełny SCHEMA-005, actual/estimate).**
 5. **Q-012 — luki historyczne (1933-03-10 w akcjach i FF, 2011-06-24 w BTC) vs „cała historia”
    i domyślne polityki `error`** (SIG-003, NORM-010, NORM-004/005). Dosłownie każdy run
    z sygnałem akcji lub BTC kończy się błędem. Propozycja: polityki egzekwowane na zakresie
@@ -152,13 +156,15 @@ specyfikacji dotyczy kompletności BTC przy `as_of` w piątek/sobotę (Q-007).
 
 * Audyt: 12 wierszy MUST `BLOCKED`. Po adjudykacji (sekcja 12) zostaje 5 wierszy MUST `BLOCKED`
   przez DATA BLOCKER: SEM-003 (Q-002); SEM-001 (Q-004); SCHEMA-005, SEM-007, TEST-038 (Q-008).
-  Pozostałe (Q-005, Q-012, Q-020) są rozstrzygnięte i wróciły do `MAPPED`.
+  Pozostałe (Q-005, Q-012, Q-020) są rozstrzygnięte i wróciły do `MAPPED`. Sesja 15: Q-004 i
+  Q-008 rozwiązane nowymi danymi kanonicznymi; jedynym wierszem MUST `BLOCKED` jest SEM-003
+  (Q-002, LBMA Gold PM).
 * Scenariusze wymagające decyzji (z `scenario_feasibility.csv`):
 
 | Scenariusz | Problem | Pytania |
 |---|---|---|
 | S01 / CLI-001 | warm-up złota 51 < 55 tygodni przed 1971-01-01 — sesja 13: Q-013 RESOLVED, ERR-003 na staged jest oczekiwanym skutkiem Q-002; CLI-001 PASS na fixture z historią złota | Q-013, Q-002 |
-| S05 / CLI-005 | dywidendy kończą się 2026-06-26 < `--end` 2026-07-31 (5 tygodni); nazwa pliku z CLI nie istnieje | Q-009, Q-001, Q-008 |
+| S05 / CLI-005 | dywidendy kończą się 2026-06-26 < `--end` 2026-07-31 (5 tygodni); nazwa pliku z CLI nie istnieje — sesja 15: plik kanoniczny o tej nazwie istnieje i sięga 2026-09-18, koniec = 2026-07-31 | Q-009, Q-001, Q-008 |
 | S06 / CLI-006 | brak wag (ALLOC-001), `configs/portfolio.yaml` poza clean-room; bez `--start` zakres obejmuje lukę 1933 — sesja 9: rozstrzygnięte zamrożonym configiem V2 `work/configs/tax_compare_s06.yaml` (Q-023 RESOLVED) | Q-023, Q-025, Q-012 |
 | S09 / CLI-011 | 0 okien OOS (13.93 roku < 15 lat treningu) | Q-020, Q-022 |
 | CLI-007 | brak wag → błąd wg ALLOC-001 | Q-024 |
@@ -199,15 +205,16 @@ Repozytorium jest gotowe do rozpoczęcia implementacji warstw niezależnych od b
 6 blokerów; do tego czasu odpowiadające im wiersze pozostają `BLOCKED`, a V2 będzie emitować
 jawne ostrzeżenia lub czytelne błędy zamiast cichych założeń.
 
-## 12. Adjudykacje użytkownika (sesje 2–14)
+## 12. Adjudykacje użytkownika (sesje 2–15)
 
 | Pytanie | Status | Skutek |
 |---|---|---|
 | Q-002 złoto | DATA_BLOCKER | Loader/sygnał/zwrot wg LBMA PM (DATA-003, SIG-009, SEM-003) testowane syntetycznym LBMA; staged TVC/OANDA tylko jako jawne proxy (`canonical=false`). SEM-003 pozostaje BLOCKED. |
-| Q-004 splice akcji | DATA_BLOCKER | Wsparcie segmentów źródłowych i kanonicznej kompozycji Schwert < 1928 + SPX ≥ 1928 z rebasingiem; staged plik z ostrzeżeniem o provenance. SEM-001 pozostaje BLOCKED. |
+| Q-004 splice akcji (sesja 15) | RESOLVED | Canonical stock signal is now composed from a raw-verified Schwert capital-gain price index before 1928 and TradingView SPX weekly Close from 1928, rebased at the common 1927-12-30 week. Plik `US_STOCK_PRICE_WEEKLY_1885_2026.csv` używany domyślnie (bez aliasu), segmenty z kolumny source, rebase i SHA-256 surowych wejść z sidecara w manifeście. SEM-001 PASS. |
 | Q-005 BTC | RESOLVED | Normalizacja raw Monday→Friday (`week_key = source_week_start + 4`, `available_at = close_date = week_key + 2`), zakres kanoniczny 2011-07-08..2026-09-18 (794 wiersze). |
 | Q-006 zakres BTC | RESOLVED | Wynika z Q-005. |
-| Q-008 dywidendy | DATA_BLOCKER | Loader kanoniczny wymaga pełnego SCHEMA-005; staged plik tylko przez adapter proxy. SCHEMA-005, SEM-007 i TEST-038 pozostają BLOCKED. |
+| Q-008 dywidendy (sesja 15) | RESOLVED | Plik `SPX_dividend_return_weekly_1970_2026.csv` (pełny SCHEMA-005, 2960 piątków 1970-01-02..2026-09-18, actual do 2025-12-26, estimate 2026; Shiller D w jednostkach kanonicznego SPX, smoothing D / piątki roku; Q3 2026 estimate = 21.13 index points) przechodzi loader canonical i TEST-038 na prawdziwym pliku. SCHEMA-005, SEM-007, TEST-038 PASS. |
+| Q-010 tydzień częściowy (sesja 15) | RESOLVED | Kanoniczny plik akcji kończy się tygodniem 2026-09-25 (source_date 2026-09-21); TEST-051/SEM-011 odtworzone na prawdziwym pliku (as_of 2026-09-22 odrzuca tydzień). |
 | Q-012 luki kalendarza | RESOLVED | Cała historia do rekonstrukcji; luka tygodnia przerywa liczniki confirmation; brak auto forward-fill; polityki `error/drop/carry` tylko dla brakującego źródła w tygodniu kalendarza runu; wspólne luki raportowane. |
 | Q-020 walk-forward | RESOLVED | `train_years=15` bez skracania; brak pełnego okna → „insufficient history for requested walk-forward training window”. |
 | Q-011 historia akcji (sesja 13) | RESOLVED | Najwcześniejsza potwierdzona historia stock signal: piątek 1920-01-02; nazwa pliku z 1885 nie jest dowodem danych; TEST-023 signal-only na tej historii. |
@@ -243,7 +250,7 @@ jawne ostrzeżenia lub czytelne błędy zamiast cichych założeń.
 | Q-045 CPI / real CAGR (sesja 7) | RESOLVED | CPI_start = miesiąc inception, CPI_end = miesiąc ostatniego zachowanego tygodnia (previous_available z flagą); real_cagr pre-tax wymagany, after_tax_real_cagr dodatkowo; dokładne ostrzeżenie US CPI. |
 | Q-046 sell_to_pay (sesja 4) | RESOLVED | Wartości po kroku 1; A rf_base → B rezerwy pro rata → C stocks/gold/btc pro rata do wartości rynkowych z gross-up `N/(1-c)` ograniczonym do pozycji; każda sprzedaż aktualizuje cost basis i realizację; stan sygnału bez zmian; insolvency, gdy wartość likwidacyjna netto < należność; wynik niezależny od kolejności kluczy. |
 
-Wiersze MUST nadal `BLOCKED` (dane niekanoniczne): SEM-001, SEM-003, SCHEMA-005, SEM-007, TEST-038.
+Wiersz MUST nadal `BLOCKED` (dane niekanoniczne): SEM-003 (Q-002, LBMA Gold PM).
 
 ## 13. Stan implementacji
 
@@ -365,11 +372,23 @@ Wiersze MUST nadal `BLOCKED` (dane niekanoniczne): SEM-001, SEM-003, SCHEMA-005,
   duplikatów). FND-002, FND-005 i FND-009 PASS; Q-037, Q-047 RESOLVED. Regresja: 24 komendy
   bez różnic w wynikach (tylko nowe pola 0/puste).
 
-Stan macierzy: MUST — 347 `PASS`, 0 `IN_PROGRESS`, 0 `MAPPED`, 5 `BLOCKED` (DATA BLOCKER:
-SEM-001, SEM-003, SCHEMA-005, SEM-007, TEST-038), 0 `FAIL`; SHOULD — 21 `PASS`. Testy:
-`python -m pytest work` (wszystkie przechodzą). Żaden wiersz zablokowany przez Q-002/Q-004/Q-008
-nie został oznaczony `PASS` na podstawie staged plików; dowody dla LBMA, segmentów SEM-001 i
-kanonicznego SCHEMA-005 pochodzą z syntetycznych fixture'ów.
+* Sesja 15 (Q-004 i Q-008 wyłącznie nowymi danymi kanonicznymi, bez zmian silnika): pliki
+  `US_STOCK_PRICE_WEEKLY_1885_2026.csv` (Schwert 1920-01-02..1927-12-30 + SPX
+  1928-01-06..2026-09-25, rebase 23.2423477355492638731596828992 na 1927-12-30) i
+  `SPX_dividend_return_weekly_1970_2026.csv` (SCHEMA-005, 2960 piątków, actual/estimate)
+  zweryfikowane niezależnie (`work/tools/verify_canonical_data.py`, 28 kontroli PASS) i w audycie
+  wejść; sidecary provenance, `data_status` w `input/source_manifest.json`, `verify_inputs.py`
+  rozróżnia canonical/proxy. Loader: `source_date` jako metadana, segmenty i rebase z pliku i
+  sidecara, kontrole wartości i bloków statusów dywidend. Testy mechaniki z wartościami staged
+  przypinają staged proxy jawnie (`work/config/staged_proxy_data.yaml`), testy danych używają
+  plików kanonicznych (TEST-038 na prawdziwym pliku, SEM-001 wokół splice, granica statusów
+  DIV-011, SEM-011 na prawdziwym tygodniu 2026-09-25). SEM-001, SCHEMA-005, SEM-007, TEST-038
+  PASS; Q-004, Q-008, Q-010 RESOLVED; Q-002 pozostaje DATA_BLOCKER.
+
+Stan macierzy: MUST — 351 `PASS`, 0 `IN_PROGRESS`, 0 `MAPPED`, 1 `BLOCKED` (DATA BLOCKER:
+SEM-003, Q-002), 0 `FAIL`; SHOULD — 21 `PASS`. Testy: `python -m pytest work` (wszystkie
+przechodzą). SEM-003 nie został oznaczony `PASS` na podstawie staged złota (proxy TVC/OANDA);
+dowody mechaniki LBMA pochodzą z syntetycznych fixture'ów. `freeze_v2.py` nie był uruchamiany.
 
 <!-- AUDIT_COUNTS
 requirements_total=379
@@ -380,21 +399,21 @@ blockers=6
 major=20
 minor=26
 must_mapped=0
-must_blocked=5
-must_pass=347
+must_blocked=1
+must_pass=351
 should_proposed_deferral=1
-input_checks=58
-checks_fail=12
-checks_warn=14
-checks_pass=27
-checks_info=5
+input_checks=63
+checks_fail=7
+checks_warn=10
+checks_pass=39
+checks_info=7
 scenarios_total=20
-scenarios_feasible=10
-scenarios_needs_decision=10
+scenarios_feasible=13
+scenarios_needs_decision=7
 blocker_ids=Q-002,Q-004,Q-005,Q-008,Q-012,Q-020
-data_blocker_ids=Q-002,Q-004,Q-008
-resolved_ids=Q-005,Q-006,Q-011,Q-012,Q-013,Q-014,Q-015,Q-016,Q-017,Q-018,Q-019,Q-020,Q-022,Q-023,Q-024,Q-025,Q-026,Q-027,Q-029,Q-030,Q-032,Q-033,Q-034,Q-035,Q-037,Q-038,Q-039,Q-040,Q-041,Q-045,Q-046,Q-047,Q-049,Q-050,Q-051,Q-052
-open_questions=13
+data_blocker_ids=Q-002
+resolved_ids=Q-004,Q-005,Q-006,Q-008,Q-010,Q-011,Q-012,Q-013,Q-014,Q-015,Q-016,Q-017,Q-018,Q-019,Q-020,Q-022,Q-023,Q-024,Q-025,Q-026,Q-027,Q-029,Q-030,Q-032,Q-033,Q-034,Q-035,Q-037,Q-038,Q-039,Q-040,Q-041,Q-045,Q-046,Q-047,Q-049,Q-050,Q-051,Q-052
+open_questions=12
 must_fail=0
 must_in_progress=0
 should_pass=21

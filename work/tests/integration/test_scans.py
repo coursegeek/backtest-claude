@@ -1,5 +1,5 @@
-"""delay-scan, threshold-scan and rebalance-scan end to end on the staged data (mechanics
-validation - stocks, gold and dividends are staged proxies, Q-002/Q-004/Q-008): one shared
+"""delay-scan, threshold-scan and rebalance-scan end to end on the clean-room data (canonical
+stock signal and dividend files since Q-004/Q-008; gold is the staged Q-002 proxy): one shared
 prepared input per scan, one full production run per grid point, grid_results.csv with one
 row per resolved grid point (DELAY-001..005, THR-001..005, REB-010, REP-010, CLI-002/003/010,
 NORM-019/020, ERR-003, ERR-005)."""

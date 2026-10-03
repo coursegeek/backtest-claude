@@ -272,9 +272,9 @@ OOS, sekcja 12), Q-011 (historia akcji od 1920-01-02), Q-013 (ścisły warm-up, 
 RISK_ON), Q-024 (CLI-007 bez wag = ALLOC-001), Q-025 (start bez --start po warm-upie, klucze
 --data-file), Q-038 (komenda signals), Q-047 (roczny internal trading tax fundacji bez
 carry-forward), Q-037 (distribution_schedule: wypłaty brutto, podatek potrącany z wypłaty,
-kumulatywna baza gain_only, koniec bez likwidacji). DATA BLOCKER (bez wpływu na implementację, tylko
-na PASS wymagań o danych kanonicznych): Q-002 złoto LBMA, Q-004 provenance splice akcji, Q-008
-schemat dywidend. Pozostałe pytania MAJOR/MINOR są implementowane wg `proposed_interpretation`
+kumulatywna baza gain_only, koniec bez likwidacji), Q-004 i Q-008 (sesja 15: rozwiązane nowymi
+danymi kanonicznymi akcji i dywidend). DATA BLOCKER (bez wpływu na implementację, tylko na PASS
+wymagań o danych kanonicznych): Q-002 złoto LBMA (SEM-003). Pozostałe pytania MAJOR/MINOR są implementowane wg `proposed_interpretation`
 za przełącznikami configu i opisane w `IMPLEMENTATION_NOTES.md`.
 
 ## 15. Kolejność implementacji (postęp: kroki 1–4 zrobione w sesjach 2–3, bez podatków w kroku 4)

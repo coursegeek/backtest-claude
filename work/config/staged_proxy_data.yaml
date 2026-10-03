@@ -1,0 +1,25 @@
+# Superseded staged clean-room proxies for the stock signal and the dividend series, pinned
+# explicitly (development compatibility and mechanics regression tests whose expected values
+# were frozen on the staged data). Never canonical evidence: SEM-001 (Q-004) and
+# SCHEMA-005 / SEM-007 / TEST-038 (Q-008) are satisfied only by the canonical defaults
+# US_STOCK_PRICE_WEEKLY_1885_2026.csv and SPX_dividend_return_weekly_1970_2026.csv, which the
+# default resolution uses directly.
+#
+# Usage: python backtest.py run --config work/config/staged_proxy_data.yaml ...
+data:
+  overrides:
+    stocks_price: US_STOCK_PRICE_WEEKLY_REAL_1919_2026.csv
+    dividend: SPX_dividend_return_weekly_shiller.csv
+  adapters:
+    dividend: shiller_proxy
+  stocks_signal_segments:
+    - source: Schwert
+      from: "1920-01-02"
+      to: "1962-06-29"
+      verified: true
+      note: identical row by row to US_STOCK_PRICE_WEEKLY_schwert_1919_1962.csv (audit A-STK-008)
+    - source: SPX (rebased, inferred)
+      from: "1962-07-06"
+      to: "2026-09-18"
+      verified: false
+      note: differs from the Schwert file from week_start 1962-07-02; origin not recorded in file

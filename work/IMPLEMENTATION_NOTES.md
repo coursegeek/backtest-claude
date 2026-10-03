@@ -20,7 +20,10 @@ Sesja 14 domknęła ostatnie MUST `IN_PROGRESS`: niezerowy internal trading tax 
 i `tax.foundation.tax_event=distribution_schedule` (Q-037). Nie ma jeszcze (SHOULD):
 rolling_metrics.csv (MET-022/023), tabela konsolowa (REP-011), `spread_annual_dps` (DIV-009).
 Jedynym niezdefiniowanym przypadkiem jest kombinacja `distribution_schedule` z niezerowym internal
-trading tax (ConfigError, punkt 126). Wszystkie MUST poza pięcioma DATA_BLOCKER są `PASS`.
+trading tax (ConfigError, punkt 126). Sesja 15 zamknęła Q-004 i Q-008 wyłącznie nowymi danymi
+kanonicznymi (sygnał akcji Schwert < 1928 + SPX ≥ 1928 i plik dywidend SCHEMA-005, punkty
+129–137), bez zmian silnika. Wszystkie MUST poza jednym DATA_BLOCKER (SEM-003, złoto LBMA PM,
+Q-002) są `PASS`.
 
 Źródło prawdy dla statusów: `compliance_matrix.csv`; pytania: `implementation_questions.csv`.
 
@@ -84,15 +87,19 @@ Warstwy: `models`, `errors`, `config`, `calendar`, `availability`, `data_loader`
    * akcje: `week_start` (+4) lub `week_end`; segmenty z kolumny `source`, z deklaracji
      w profilu albo z kompozycji `compose_stock_signal` (Schwert < 1928 + SPX ≥ 1928,
      rebasing na ostatnim wspólnym tygodniu przed splice). `canonical` = spełnione SEM-001
-     (`sem001_check`). Staged plik: segmenty 1962, `canonical=false`, ostrzeżenie (Q-004).
+     (`sem001_check`). Domyślny plik kanoniczny (sesja 15): kolumny `source`/`source_date`,
+     Schwert 1920-01-02..1927-12-30 + SPX 1928-01-06..2026-09-25, `canonical=true` (punkt
+     130). Staged plik (tylko jawnie, `work/config/staged_proxy_data.yaml`): segmenty 1962,
+     `canonical=false`, ostrzeżenie (historia Q-004).
    * złoto: `lbma_weekly` (`week_end`), `lbma_daily` (agregacja ostatniego fixingu tygodnia,
      NORM-009) — kanoniczne; `tvc_oanda_proxy` tylko jawnie (profil), `canonical=false`,
      wiersze FILL oznaczone (Q-002). Kolumna `source` bez „LBMA” odbiera kanoniczność.
    * BTC: `canonical_friday` lub `raw_monday_week_start` (auto-detekcja); `week_key =
      source_week_start + 4`, `available_at = close_date = week_key + 2`; zakres kanoniczny
      z profilu 2011-07-08..2026-09-18 (794 wiersze), wiersze spoza zakresu w `excluded` (Q-005).
-   * dywidendy: `canonical` wymaga pełnego SCHEMA-005; `shiller_proxy` jawnie, `canonical=false`
-     (Q-008). Tryb exact: osobny plik `pay_date,dividend_return`; plik smoothed odrzucany (Q-036).
+   * dywidendy: `canonical` wymaga pełnego SCHEMA-005 (domyślny plik kanoniczny od sesji 15,
+     punkt 132); `shiller_proxy` jawnie, `canonical=false` (historia Q-008). Tryb exact:
+     osobny plik `pay_date,dividend_return`; plik smoothed odrzucany (Q-036).
    * FF: CSV lub ZIP, filtr `^\d{8}$` + pola numeryczne, kolumny po nazwie, mapowanie NORM-013;
      `available_at` = data rekordu (sobota w okresie sesji sobotnich).
    * CPI: `previous_available` z flagą imputacji albo `error`.
@@ -853,8 +860,9 @@ Warstwy: `models`, `errors`, `config`, `calendar`, `availability`, `data_loader`
     `test_portfolio_accounting_layers`); reporting.py i manifest.py zapisują wyniki już
     policzone, żadna warstwa obliczeniowa od nich nie zależy
     (`test_reporting_is_a_separate_layer`).
-119. **Odroczone SHOULD (bez wpływu na MUST)**: DIV-009 `spread_annual_dps` (brak danych
-    trailing/annual DPS; `use_supplied_dividend_return` działa), MET-022/023 rolling metrics,
+119. **Odroczone SHOULD (bez wpływu na MUST)**: DIV-009 `spread_annual_dps` (od sesji 15 dane
+    trailing DPS istnieją, tryb runtime pozostaje jawnie odroczony; `use_supplied_dividend_return`
+    działa, punkt 133), MET-022/023 rolling metrics,
     REP-011 tabela konsolowa. MUST nie-PASS: FND-002 (Q-047), FND-005 (Q-037) oraz 5 wierszy
     DATA_BLOCKER (SEM-001, SEM-003, SCHEMA-005, SEM-007, TEST-038).
 
@@ -943,3 +951,105 @@ Warstwy: `models`, `errors`, `config`, `calendar`, `availability`, `data_loader`
     bajtowo identyczne wyniki poza nowymi zerowymi/pustymi kolumnami i kluczami (24 komendy
     regresji: 241 plików bajtowo identycznych, pozostałe różnią się tylko nowymi polami 0/puste).
     Tydzień, w którym harmonogram wypłaci cały NAV, kończy ścieżkę z NAV 0 (zwrot tygodnia 0).
+
+## Dane kanoniczne akcji i dywidend (sesja 15)
+
+129. **Handoff i staging**: dwa finalne pliki z handoffu skopiowano bez zmian do
+    `input/data/` pod nazwami domyślnymi specyfikacji po sprawdzeniu SHA-256 i zawartości:
+    `US_STOCK_PRICE_WEEKLY_1885_2026.csv` (af1da27aa7d8dc689cb5d2f57f4a9c37e70f95fab18514a5f3087b98078987bd)
+    i `SPX_dividend_return_weekly_1970_2026.csv`
+    (a62191993c42a5692072323d34947d2095b0e5ca162ca63c23ed91ebba7e8cf5). Obok nich sidecary
+    `<plik>.provenance.json` (metadane budowy: SHA-256 surowych plików, metoda, rebase, segmenty,
+    estymata 2026, SHA-256 pliku końcowego). `input/source_manifest.json` ma pole
+    `data_status` (specification/canonical/provenance/proxy/supplemental) dla każdego pliku;
+    `tools/verify_inputs.py` sprawdza hashe, zgodność sidecarów z plikami i wypisuje, które
+    domyślne nazwy DATA-* istnieją. Surowe pliki dostawców (stkdatd.zip, ie_data.xls, eksport
+    TradingView) nie są w repozytorium i nie zostały dostarczone do sesji: ich SHA-256 są
+    deklaracją handoffu; w repo nie ma polityki licencyjnej danych, więc niczego nie
+    redystrybuowano.
+130. **Sygnał akcji (SEM-001, Q-004 RESOLVED)**: Schwert price-only (capital gain return,
+    `index_t = index_(t-1) * (1 + cg_t)`, ostatnia obserwacja tygodnia Mon-Sun -> piątek)
+    1920-01-02..1927-12-30 (418) + TradingView SPX 1W Close 1928-01-06..2026-09-25 (5151)
+    przemnożony przez 23.2423477355492638731596828992 = 410.4598610098 / 17.66 (anchor
+    1927-12-30, który zostaje w pliku jako Schwert). Loader czyta segmenty z kolumny `source`
+    (verified), `rebase_factor` segmentu SPX i blok `splice` z sidecara; `canonical=true`, bez
+    ostrzeżeń. `source_date` (Schwert: data ostatniej sesji, zwykle sobota; SPX: timestamp
+    tygodniowego bara, zwykle poniedziałek) jest wyłącznie metadaną obserwacji
+    (`weekly_normalized.csv`), dostępność informacji pozostaje piątkiem week_key (NORM-019);
+    `source_date` spoza tygodnia wiersza jest błędem (NORM-013). Jedyna luka 1933-03-10 nie
+    jest wypełniana (Q-012). Nazwa pliku z 1885 nie rozszerza historii (start 1920-01-02, Q-011).
+131. **Weryfikacja sygnału akcji** (`work/tools/verify_canonical_data.py` ->
+    `work/audit/canonical_data_checks.csv`, niezależnie od `src`): segment Schwert identyczny
+    (stringi cen) z plikiem supplemental Schwert; implikowane surowe zamknięcia SPX leżą na
+    siatce 0.01 (szum float TradingView <= 0.001), 1928-01-06 = 17.66, 1928-01-13 = 17.58;
+    zwroty SPX 1928-1962 zgodne z Schwert w tym samym tygodniu (korelacja 0.92 vs 0.12/0.03 dla
+    przesunięć ±1); po 1962 te same zamknięcia SPX co w staged proxy (stały iloraz). Korelacja
+    FF z nowym indeksem (NORM-018) wynosi 0.957 (0.99 od 1963): przed 1953 FF/CRSP mają tygodnie
+    sobotnie, a historia SPX TradingView zamknięcia piątkowe, i S&P to inny indeks niż CRSP VW;
+    wyrównanie tygodni jest poprawne (przesunięcia < 0.1). Test NORM-018 sprawdza te progi.
+132. **Dywidendy (SCHEMA-005, SEM-007, TEST-038, Q-008 RESOLVED)**: dokładnie kolumny
+    SCHEMA-005; 2960 piątków 1970-01-02..2026-09-18, kroki 7 dni, bez luk i duplikatów;
+    `year == date.year`; wszystkie pola > 0; maksymalny błąd względny `dividend_return` vs
+    `dividend_points / spx_close_prev` = 0.0; `spx_close`/`spx_close_prev` równe kanonicznemu
+    sygnałowi akcji w tygodniu / poprzednim piątku; status actual 1970-01-02..2025-12-26 (2922)
+    i estimate 2026-01-02..2026-09-18 (38). Budowa: Shiller `ie_data.xls` (Date, P, D),
+    `trailing_dps_points = D * 23.2423477355492638731596828992` (tylko zmiana jednostki),
+    `annual_yield_pct = D / P * 100`, `dividend_points = trailing_dps_points / liczba piątków
+    roku` (52/53), `dividend_return = dividend_points / spx_close_prev`. Estymata 2026 (nigdy
+    `actual`): Q3 2026 estimate = 21.13 index points; TTM Sep 2026 = TTM Jun 2026 (81.7032) -
+    Q3 2025 actual (19.81) + Q3 2026 estimate (21.13) = 83.0232; lipiec/sierpień interpolacja
+    liniowa (82.1432, 82.5832). Loader canonical dodatkowo: ujemne pola -> błąd walidacji
+    `dividend_value`; bloki statusów w manifeście (`status_blocks`), blok actual po bloku
+    estimate -> ostrzeżenie `dividend_status_order`.
+133. **DIV-009 (SHOULD)**: plik kanoniczny realizuje ekonomicznie `spread_annual_dps`
+    (zweryfikowane: `dividend_points = trailing_dps_points / piątki roku`, błąd 0.0), ale tryb
+    runtime `tax.dividend_approx_method=spread_annual_dps` pozostaje jawnie odroczony; runtime
+    `use_supplied_dividend_return` czyta gotowy `dividend_return`.
+134. **Rozdzielczość domyślna**: istniejący plik domyślny DATA-001 / DATA-007 jest używany
+    bezpośrednio (`resolved_via_alias=false`, adapter `week_end` / `canonical`); alias profilu
+    `cleanroom_data.yaml` pozostaje tylko fallbackiem dla data.dir bez tych plików (złoto i BTC
+    nadal przez alias, złoto `tvc_oanda_proxy`, `canonical=false`, ostrzeżenie Q-002). Staged
+    proxy akcji/dywidend można przypiąć jawnie: `--config work/config/staged_proxy_data.yaml`
+    (overrides + adapter `shiller_proxy` + deklarowane segmenty). Sidecar provenance
+    (dopasowany po SHA-256 pliku) trafia do `data_manifest.json` jako `extra.build_provenance`
+    (SHA-256 surowych wejść, podsumowanie, splice/rebase, estymata 2026) bez wpływu na wartości;
+    sidecar opisujący inną zawartość jest ignorowany z ostrzeżeniem.
+135. **Testy: mechanika vs dane kanoniczne**: testy mechaniki z wartościami zamrożonymi na
+    danych staged przypinają staged proxy jawnie (`fixtures.builders.staged_proxy_layer` /
+    `staged_proxy_overrides`) i zachowują dotychczasowe wartości (regresja Q-033, mechanika
+    supersetu kalendarza tax-compare na pliku dywidend kończącym się 2026-06-26). Testy
+    integracji danych przełączono na pliki kanoniczne: TEST-038 na prawdziwym pliku
+    (`test_dividend_input_file_canonical`), SEM-001 w manifeście i wokół splice
+    (1927-12-30 Schwert, 1928-01-06/13 SPX), manifest canonical/proxy, SEM-011/TEST-051 na
+    prawdziwym wierszu 2026-09-25 (Q-010 RESOLVED), granica statusów 2025-12-26 / 2026-01-02 z
+    trzema politykami DIV-011, CLI-005 (koniec 2026-07-31 zamiast 2026-06-26), statusy
+    dywidend w tax_events (actual do 2025, estimate w 2026), CLI-009 (brak ostrzeżenia
+    provenance akcji, ostrzeżenie złota pozostaje).
+136. **Skutki liczbowe (oczekiwane, nie regresja silnika)**: wyniki zależne od dywidend
+    (profile podatkowe ze smoothed_weekly) i od sygnału akcji przed 1963 (Schwert -> SPX
+    1928-1962: S02/S03 od 1971 z historią sygnału, runy od 1926) zmieniają się; sygnał akcji od
+    1963 ma te same stany (ta sama seria SPX z innym stałym mnożnikiem, stosunek ceny do SMA bez
+    zmian), więc w runach profilu none od 2015/2018 summary/weekly_portfolio/trades są bajtowo
+    identyczne, a signals.csv różni się tylko poziomem ceny/SMA/pasm. S05/S06/CLI-005 nie są już
+    obcinane do 2026-06-26 (dywidendy do 2026-09-18; koniec = `--end` 2026-07-31); estymata
+    dywidend dotyczy tylko tygodni 2026. Zestaw 24 komend (385 plików) z jawnie przypiętymi
+    staged proxy (`--config work/config/staged_proxy_data.yaml`) odtwarza bajtowo wszystkie pliki
+    wynikowe sprzed sesji (summary, weekly_portfolio, trades, tax_events, signals, grid_results,
+    ...); różnice wyłącznie w metadanych (config_resolved, data_manifest/hashe konfiguracji, brak
+    ostrzeżeń `default_file_alias` przy jawnym przypięciu, nowy klucz `status_blocks`), czyli
+    silnik bez zmian. Na danych kanonicznych: tożsamość NAV = suma składników (błąd 0), ciągłość
+    nav_start = poprzedni nav_end, `total_tax_paid` = suma tax_events (<= 1.3e-16) we wszystkich
+    20 runach z portfelem; S05 jobs=1 vs jobs=4 i dwa runy S07 identyczne (różni się tylko
+    `run_name`).
+137. **Pozostały DATA_BLOCKER**: wyłącznie SEM-003 / Q-002 (LBMA Gold PM); staged złoto
+    pozostaje proxy `tvc_oanda_proxy`. `freeze_v2.py` nie był uruchamiany.
+138. **Poprawka raportowania ujawniona przez dane kanoniczne (osobno od danych)**: seria
+    dywidend (smoothed_weekly) nie przechodziła kompletności NORM-019 (`apply_completion`) jak
+    pozostałe źródła, więc plik sięgający poza `run.end` / `as_of` dawał fałszywe ostrzeżenie
+    `range_truncated dividend: end truncated from 2026-09-18 to common 2026-07-31` (staged plik
+    kończył się przed końcem runu, więc nie było to widoczne). Teraz tygodnie dywidend po
+    min(run.end, as_of) nie należą do zakresu źródła (wiersze po as_of raportowane jako
+    `incomplete_week_dropped`, jak dla innych źródeł). Bez wpływu liczbowego (tygodnie po końcu
+    kalendarza nigdy nie były używane); test regresyjny
+    `test_dividend_range_follows_norm019_completion` (pada bez poprawki).
+

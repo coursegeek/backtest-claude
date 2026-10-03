@@ -1,6 +1,6 @@
 """Output files of a taxed run (REP-003, REP-005, REP-015, TAX-004, PORT-007, PORT-008) on the
-staged data - mechanics only: the staged dividend file is a non-canonical proxy (Q-008), gold
-and stocks are staged proxies (Q-002, Q-004)."""
+clean-room data: canonical stock signal and dividend files (Q-004/Q-008 resolved); gold is the
+staged proxy (Q-002)."""
 import csv
 import json
 import math
@@ -62,7 +62,9 @@ def test_tax_event_types(taxed):
     rows = read("tax_events.csv")
     assert {r["event_type"] for r in rows} == {"dividend_tax", "rf_interest_tax", "capital_gains_tax",
                                                "solidarity_tax"}
-    assert {r["source_status"] for r in rows if r["event_type"] == "dividend_tax"} == {"estimate"}
+    div = [r for r in rows if r["event_type"] == "dividend_tax"]
+    assert {r["source_status"] for r in div if r["week_key"] <= "2025-12-26"} == {"actual"}
+    assert {r["source_status"] for r in div if r["week_key"] >= "2026-01-02"} == {"estimate"}
     pays = read("payments.csv")
     for t in ("capital_gains_tax", "solidarity_tax"):
         due = math.fsum(float(r["amount"]) for r in rows if r["event_type"] == t)

@@ -380,7 +380,7 @@ CLI_011 = ["optimize", "--optimization-mode", "walk-forward", "--optimize-params
 
 
 def test_cli_011_exact_on_staged_data_needs_more_history(tmp_path):
-    """CLI-011 exactly as specified on the staged data: the BTC-bounded common calendar is far
+    """CLI-011 exactly as specified on the clean-room data: the BTC-bounded common calendar is far
     shorter than 15 training years + an OOS window -> a clear Q-020 error (exit 1), the
     training window is never shortened and nothing is written."""
     r = subprocess.run([sys.executable, BT, *CLI_011, "--output-dir", str(tmp_path / "o")],

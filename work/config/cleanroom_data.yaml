@@ -6,11 +6,15 @@
 #
 # Adjudications (work/implementation_questions.csv):
 #   Q-002 gold: staged TVC/OANDA series is a non-canonical proxy, never LBMA PM evidence.
-#   Q-004 stocks: staged series splices Schwert->SPX in 1962 (not 1928); provenance of
-#         SEM-001 is not satisfied, segments below are declared from audit evidence.
+#   Q-004 stocks (RESOLVED): the canonical default US_STOCK_PRICE_WEEKLY_1885_2026.csv now
+#         exists in data.dir and is used directly; the stocks_price alias below is kept only
+#         as history / fallback for a data.dir without the canonical file (staged series
+#         splices Schwert->SPX in 1962, SEM-001 not satisfied, segments declared from audit).
 #   Q-005 btc: raw Monday-Sunday file, canonical normalisation to Friday keys and the
 #         SEM-008 canonical range.
-#   Q-008 dividend: staged Shiller file lacks SCHEMA-005 columns; non-canonical proxy.
+#   Q-008 dividend (RESOLVED): the canonical default SPX_dividend_return_weekly_1970_2026.csv
+#         now exists in data.dir and is used directly; the dividend alias below is kept only
+#         as history / fallback (staged Shiller file lacks SCHEMA-005 columns; proxy).
 profile: cleanroom_staged
 aliases:
   stocks_price:

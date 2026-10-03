@@ -1,0 +1,29 @@
+check_id,file,requirement_ids,check,expected,observed,result
+C-STK-001,US_STOCK_PRICE_WEEKLY_1885_2026.csv,REPRO-001;REP-008,sidecar provenance describes this file,final.sha256 == file SHA-256,af1da27aa7d8dc689cb5d2f57f4a9c37e70f95fab18514a5f3087b98078987bd,PASS
+C-STK-002,US_STOCK_PRICE_WEEKLY_1885_2026.csv,SCHEMA-001,columns,"week_end,price_index_continuous,source,source_date","week_end,price_index_continuous,source,source_date",PASS
+C-STK-003,US_STOCK_PRICE_WEEKLY_1885_2026.csv,DATA-001;Q-011,rows and range,5569 rows 1920-01-02..2026-09-25,5569 rows 1920-01-02..2026-09-25,PASS
+C-STK-004,US_STOCK_PRICE_WEEKLY_1885_2026.csv,NORM-007;NORM-002,"Friday week_end, ascending, unique","all Friday, strictly ascending",{'Fri': 5569},PASS
+C-STK-005,US_STOCK_PRICE_WEEKLY_1885_2026.csv,NORM-003;Q-012,only the known common gap (not filled),"[('1933-03-03', '1933-03-17')]","[('1933-03-03', '1933-03-17')]",PASS
+C-STK-006,US_STOCK_PRICE_WEEKLY_1885_2026.csv,NORM-006,prices finite and > 0,all,5569,PASS
+C-STK-007,US_STOCK_PRICE_WEEKLY_1885_2026.csv,SEM-001,"source segments (Schwert before 1928, SPX from 1928)","[('Schwert', '1920-01-02', '1927-12-30', 418), ('SPX', '1928-01-06', '2026-09-25', 5151)]","[('Schwert', '1920-01-02', '1927-12-30', 418), ('SPX', '1928-01-06', '2026-09-25', 5151)]",PASS
+C-STK-008,US_STOCK_PRICE_WEEKLY_1885_2026.csv,SEM-001;REP-008,sidecar segments equal the file segments,"[('Schwert', '1920-01-02', '1927-12-30', 418), ('SPX', '1928-01-06', '2026-09-25', 5151)]","[('Schwert', '1920-01-02', '1927-12-30', 418), ('SPX', '1928-01-06', '2026-09-25', 5151)]",PASS
+C-STK-009,US_STOCK_PRICE_WEEKLY_1885_2026.csv,NORM-013;NORM-007,source_date in the same Monday-Sunday week,0 rows outside,0,PASS
+C-STK-010,US_STOCK_PRICE_WEEKLY_1885_2026.csv,SEM-001,rebase factor = anchor Schwert value / anchor SPX raw close,23.2423477355492638731596828992,23.2423477355492638731596828992 (anchor row 410.4598610098),PASS
+C-STK-011,US_STOCK_PRICE_WEEKLY_1885_2026.csv,SEM-001,SPX rows = raw close * factor (implied raw close on a 2-decimal grid within TradingView float noise),<= 0.0011,max 0.001000; first SPX week 1928-01-06: raw 17.660000,PASS
+C-STK-012,US_STOCK_PRICE_WEEKLY_1885_2026.csv,SEM-001,Schwert segment identical to the supplemental Schwert file,0 differing price strings,0,PASS
+C-STK-013,US_STOCK_PRICE_WEEKLY_1885_2026.csv,SEM-001;NORM-018,SPX weekly returns aligned with Schwert (1928-1962),same-week corr > 0.9 and > shifted,"{-1: 0.124, 0: 0.9198, 1: 0.0347}",PASS
+C-STK-014,US_STOCK_PRICE_WEEKLY_1885_2026.csv,SEM-001,same SPX closes as the superseded staged proxy after 1962,constant ratio,ratio 1.001979699982..1.001979699982,PASS
+C-STK-015,US_STOCK_PRICE_WEEKLY_1885_2026.csv,SEM-011;NORM-019,last row is the SEM-011 week,"week_end 2026-09-25, source_date 2026-09-21",2026-09-25 2026-09-21,PASS
+C-DIV-001,SPX_dividend_return_weekly_1970_2026.csv,REPRO-001;REP-008,sidecar provenance describes this file,final.sha256 == file SHA-256,a62191993c42a5692072323d34947d2095b0e5ca162ca63c23ed91ebba7e8cf5,PASS
+C-DIV-002,SPX_dividend_return_weekly_1970_2026.csv,SCHEMA-005,exactly the SCHEMA-005 columns,"date,dividend_return,dividend_points,spx_close_prev,spx_close,year,annual_yield_pct,trailing_dps_points,status","date,dividend_return,dividend_points,spx_close_prev,spx_close,year,annual_yield_pct,trailing_dps_points,status",PASS
+C-DIV-003,SPX_dividend_return_weekly_1970_2026.csv,SEM-007;TEST-038,range and rows,"1970-01-02..2026-09-18, 2960 rows","1970-01-02..2026-09-18, 2960 rows",PASS
+C-DIV-004,SPX_dividend_return_weekly_1970_2026.csv,SEM-007;DIV-012;TEST-038,"Friday dates, exact +7 days, no gaps or duplicates",all Friday; steps {7},weekdays {'Fri': 2960}; steps {7: 2959},PASS
+C-DIV-005,SPX_dividend_return_weekly_1970_2026.csv,SCHEMA-005,year == date.year,all rows,2960,PASS
+C-DIV-006,SPX_dividend_return_weekly_1970_2026.csv,SEM-007;DIV-011;DIV-012,statuses and boundary,actual 1970-01-02..2025-12-26 (2922); estimate 2026 (38),"actual 1970-01-02..2025-12-26 (2922); estimate 2026-01-02..2026-09-18 (38); values ['actual', 'estimate']",PASS
+C-DIV-007,SPX_dividend_return_weekly_1970_2026.csv,NORM-006;SCHEMA-005,numeric fields finite and > 0,all,2960,PASS
+C-DIV-008,SPX_dividend_return_weekly_1970_2026.csv,SCHEMA-005;SEM-007;DIV-012;TEST-038,dividend_return == dividend_points / spx_close_prev,rel err <= 1e-09,max rel err 0.0,PASS
+C-DIV-009,SPX_dividend_return_weekly_1970_2026.csv,SCHEMA-005;SEM-001,spx_close / spx_close_prev = canonical stock signal at date / previous Friday,exact,0 / 0 mismatches,PASS
+C-DIV-010,SPX_dividend_return_weekly_1970_2026.csv,DIV-009;SEM-007,dividend_points = trailing_dps_points / Fridays in the calendar year (spread_annual_dps semantics),rel err <= 1e-09,0.0,PASS
+C-DIV-011,SPX_dividend_return_weekly_1970_2026.csv,DIV-009,trailing D and yield constant within each month (monthly Shiller fields),681 months,constant,PASS
+C-DIV-012,SPX_dividend_return_weekly_1970_2026.csv,DIV-011;SEM-007,2026 trailing D (in Shiller units) follows the documented estimate path,"{'2026-06': '81.7032', '2026-07': '82.1432', '2026-08': '82.5832', '2026-09': '83.0232'}","{'2026-06': 81.7032, '2026-07': 82.1432, '2026-08': 82.5832, '2026-09': 83.0232}",PASS
+C-DIV-013,SPX_dividend_return_weekly_1970_2026.csv,DIV-011,TTM Sep 2026 = TTM Jun 2026 - Q3 2025 actual + Q3 2026 estimate,83.0232,83.0232,PASS

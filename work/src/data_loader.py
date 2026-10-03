@@ -13,6 +13,7 @@ import datetime as dt
 import fnmatch
 import hashlib
 import io
+import json
 import math
 import re
 import zipfile
@@ -158,10 +159,45 @@ def check_price_returns(points, file_returns: dict, role: str, issues: list, req
     return bad
 
 
+def provenance_sidecar(path, sha256: str) -> tuple:
+    """The build metadata ``<file>.provenance.json`` next to a data file (REP-008): returns
+    (document or None, warning or None). A sidecar is used only when its ``final.sha256``
+    describes exactly this file; it never changes values, only what the manifest records."""
+    p = Path(path)
+    side = p.with_name(p.name + ".provenance.json")
+    if not side.is_file():
+        return None, None
+    raw = side.read_bytes()
+    try:
+        doc = json.loads(decode(raw))
+    except ValueError:
+        return None, f"provenance sidecar {side.name} is not valid JSON; ignored"
+    if (doc.get("final") or {}).get("sha256") != sha256:
+        return None, (f"provenance sidecar {side.name} describes a different file "
+                      f"(final.sha256 {(doc.get('final') or {}).get('sha256')}); ignored")
+    raw_inputs = tuple({k: x[k] for k in ("name", "sha256", "archive_member", "archive_member_sha256")
+                        if k in x} for x in doc.get("raw_inputs") or ())
+    record = {"file": side.name, "sha256": sha256_bytes(raw), "data_status": doc.get("data_status"),
+              "raw_inputs": raw_inputs, "summary": doc.get("summary") or {}}
+    splice = (doc.get("construction") or {}).get("splice")
+    if splice:
+        record["splice"] = {k: splice[k] for k in ("last_schwert_week", "first_spx_week",
+                                                   "rebase_anchor_week", "anchor_schwert_value",
+                                                   "anchor_spx_raw_close", "rebase_factor",
+                                                   "rebase_factor_float") if k in splice}
+    return record, None
+
+
 def _provenance(role, path, raw, config_key, adapter, canonical, raw_rows, points, convention,
-                raw_dates, **kw) -> Provenance:
+                raw_dates, sidecar=None, **kw) -> Provenance:
+    digest = sha256_bytes(raw)
+    doc, warning = sidecar if sidecar is not None else provenance_sidecar(path, digest)
+    if doc:
+        kw["extra"] = tuple(kw.get("extra", ())) + (("build_provenance", doc),)
+    if warning:
+        kw["warnings"] = tuple(kw.get("warnings", ())) + (warning,)
     return Provenance(
-        role=role, path=str(path), sha256=sha256_bytes(raw), config_key=config_key,
+        role=role, path=str(path), sha256=digest, config_key=config_key,
         adapter=adapter, canonical=canonical, raw_rows=raw_rows, used_rows=len(points),
         raw_first_date=min(raw_dates) if raw_dates else None,
         raw_last_date=max(raw_dates) if raw_dates else None,
@@ -221,6 +257,7 @@ def load_stocks_signal(path, config_key="data.stocks_price_file", adapter="auto"
                              config_key)
     issues, points, raw_dates = [], [], []
     use_end = "week_end" in header
+    has_source_date = "source_date" in header
     for i, r in enumerate(rows, start=2):
         if use_end:
             d = to_date(r["week_end"], "week_end", path)
@@ -239,13 +276,26 @@ def load_stocks_signal(path, config_key="data.stocks_price_file", adapter="auto"
         price = to_float(r["price_index_continuous"], "price_index_continuous", path, f" row {i}")
         if not price > 0:
             raise DataValidationError(f"{path}: row {i}: price must be > 0")
+        observed = d
+        if has_source_date and r.get("source_date"):      # metadata only: availability stays key
+            observed = to_date(r["source_date"], "source_date", path)
+            if friday_key(observed) != key:
+                raise DataValidationError(f"{path}: row {i}: source_date {observed} is not in the "
+                                          f"calendar week of {key} (NORM-013)")
         raw_dates.append(d)
-        points.append(PricePoint(key, price, key, d, r.get("source", "")))
+        points.append(PricePoint(key, price, key, observed, r.get("source", "")))
     points = normalise_points(points, role, path, duplicates, issues)
+    sidecar = provenance_sidecar(path, sha256_bytes(raw))
     if "source" in header:
-        segs = segments_from_sources(points)
-        segs = tuple(SourceSegment(s.source, s.first_key, s.last_key, s.rows, True,
-                                   "from source column") for s in segs)
+        splice = (sidecar[0] or {}).get("splice") or {}
+        segs = []
+        for s in segments_from_sources(points):
+            note, factor = "from source column", None
+            if splice.get("first_spx_week") == s.first_key.isoformat():
+                factor = splice.get("rebase_factor_float")
+                note += f"; rebased at {splice.get('rebase_anchor_week')} (provenance sidecar)"
+            segs.append(SourceSegment(s.source, s.first_key, s.last_key, s.rows, True, note, factor))
+        segs = tuple(segs)
     elif segments:
         segs = parse_declared_segments(segments)
     else:
@@ -254,10 +304,13 @@ def load_stocks_signal(path, config_key="data.stocks_price_file", adapter="auto"
     ok, reason = sem001_check(segs)
     warnings = () if ok else (f"SEM-001 provenance not satisfied: {reason}",)
     convention = "week_end" if use_end else "week_start_plus_4"
+    transformations = () if use_end else ("week_key = week_start + 4 days (NORM-008)",)
+    if has_source_date:
+        transformations += ("source_date column kept as observation metadata; information "
+                            "available at the Friday week_key (NORM-019)",)
     return PriceSeries(role, tuple(points), _provenance(
         role, path, raw, config_key, adapter if adapter != "auto" else convention, ok, len(rows),
-        points, convention, raw_dates,
-        transformations=() if use_end else ("week_key = week_start + 4 days (NORM-008)",),
+        points, convention, raw_dates, sidecar=sidecar, transformations=transformations,
         segments=segs, warnings=warnings, issues=tuple(issues),
         resolved_via_alias=resolved_via_alias, source_label="US stock price index (signal)"))
 
@@ -556,6 +609,15 @@ def load_dividend(path, config_key="data.dividend_file", adapter="canonical", du
                                 f"row {i}: year {r['year']} != {d.year}", friday_key(d), "SCHEMA-005"))
         if "spx_close" in header and r.get("spx_close", ""):
             prev_close[friday_key(d)] = to_float(r["spx_close"], "spx_close", path, f" row {i}")
+        values = {"dividend_return": dr, "dividend_points": pts}
+        if adapter == "canonical":
+            values.update((c, to_float(r[c], c, path, f" row {i}")) for c in
+                          ("spx_close", "annual_yield_pct", "trailing_dps_points"))
+        negative = [c for c, v in values.items() if v < 0 or (c == "spx_close" and v <= 0)]
+        if negative:
+            issues.append(issue(Severity.ERROR, "dividend_value", "dividend",
+                                f"row {i}: invalid {', '.join(negative)} (negative dividend or "
+                                "non-positive price)", friday_key(d), "SCHEMA-005;NORM-006"))
         key = friday_key(d)
         points.append(DividendPoint(key, dr, pts, prev, status, key))
     points = normalise_points(points, "dividend", path, duplicates, issues)
@@ -570,12 +632,24 @@ def load_dividend(path, config_key="data.dividend_file", adapter="canonical", du
         warnings.append("non-canonical dividend proxy: SCHEMA-005 columns spx_close, year, "
                         "annual_yield_pct, trailing_dps_points absent (data blocker Q-008)")
     statuses = sorted({p.status for p in points})
+    blocks = []                                   # contiguous status blocks (SEM-007, DIV-011)
+    for p in points:
+        if blocks and blocks[-1][0] == p.status:
+            blocks[-1][2] = p.week_key
+        else:
+            blocks.append([p.status, p.week_key, p.week_key])
+    if any(a[0] == "estimate" and b[0] == "actual" for a, b in zip(blocks, blocks[1:])):
+        first = next(b for a, b in zip(blocks, blocks[1:]) if a[0] == "estimate" and b[0] == "actual")
+        issues.append(issue(Severity.WARNING, "dividend_status_order", "dividend",
+                            f"status=actual from {first[1]} follows status=estimate rows",
+                            first[1], "SEM-007;DIV-011"))
     return DividendSeries(tuple(points), _provenance(
         "dividend", path, raw, config_key, adapter, adapter == "canonical", len(rows), points,
         "friday", raw_dates, warnings=tuple(warnings), issues=tuple(issues),
         resolved_via_alias=resolved_via_alias, source_label="smoothed SPX dividend return",
         extra=(("status_values", tuple(statuses)),
-               ("status_counts", tuple((s, sum(1 for p in points if p.status == s)) for s in statuses)))))
+               ("status_counts", tuple((s, sum(1 for p in points if p.status == s)) for s in statuses)),
+               ("status_blocks", tuple((s, a, b) for s, a, b in blocks)))))
 
 
 def load_dividend_cash(path, config_key="data.dividend_cash_file") -> DividendSeries:

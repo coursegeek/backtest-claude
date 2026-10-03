@@ -1,5 +1,5 @@
-"""`run` with tax.profile=none (signal-only and strategic rebalancing) on staged data
-(mechanics only; staged proxy files never serve as canonical-data evidence)."""
+"""`run` with tax.profile=none (signal-only and strategic rebalancing) on the clean-room data
+(mechanics; the staged gold proxy never serves as canonical-data evidence, Q-002)."""
 import csv
 import datetime as dt
 import json
@@ -66,7 +66,7 @@ def test_run_is_deterministic(tmp_path):
 
 
 def test_s07_band_rebalance_run(tmp_path):
-    """S07 mechanics: band 1 pp on staged data; every end-of-week breach is followed by a
+    """S07 mechanics: band 1 pp on the clean-room data; every end-of-week breach is followed by a
     band rebalance at the next retained week that restores the targets; weight_start_* in
     weekly_portfolio.csv comes from the post-rebalance ledger (PORT-012, REP-013)."""
     res = run_portfolio(cfg({"portfolio": {"rebalance": "band", "rebalance_band_pp": 1}},

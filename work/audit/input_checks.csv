@@ -1,23 +1,25 @@
 check_id,role,file,requirement_ids,check,expected,observed,result,question_ids
 A-MAN-001,all,input/source_manifest.json,REPRO-001,Staged files match source_manifest SHA256,all match,all match,PASS,
-A-MAN-stocks_signal,stocks_signal,US_STOCK_PRICE_WEEKLY_REAL_1919_2026.csv,DATA-001,Spec default filename exists in input/data,US_STOCK_PRICE_WEEKLY_1885_2026.csv,absent; staged file is US_STOCK_PRICE_WEEKLY_REAL_1919_2026.csv,WARN,Q-001
+A-MAN-stocks_signal,stocks_signal,US_STOCK_PRICE_WEEKLY_1885_2026.csv,DATA-001,Spec default filename exists in input/data,US_STOCK_PRICE_WEEKLY_1885_2026.csv,US_STOCK_PRICE_WEEKLY_1885_2026.csv,PASS,
 A-MAN-stocks_return,stocks_return,F-F_Research_Data_Factors_weekly.csv,DATA-002,Spec default filename exists in input/data,F-F_Research_Data_Factors_weekly.csv,F-F_Research_Data_Factors_weekly.csv,PASS,
 A-MAN-gold,gold,GOLD_REAL_weekly_1970_2026.csv,DATA-003,Spec default filename exists in input/data,GOLD_LBMA_PM_weekly_backtest_ready.csv,absent; staged file is GOLD_REAL_weekly_1970_2026.csv,WARN,Q-001
 A-MAN-btc,btc,BTC_REAL_weekly_2010_2026.csv,DATA-005,Spec default filename exists in input/data,BTC_weekly_date_price_2011_2026.csv,absent; staged file is BTC_REAL_weekly_2010_2026.csv,WARN,Q-001
-A-MAN-dividend,dividend,SPX_dividend_return_weekly_shiller.csv,DATA-007,Spec default filename exists in input/data,SPX_dividend_return_weekly_1970_2026.csv,absent; staged file is SPX_dividend_return_weekly_shiller.csv,WARN,Q-001
+A-MAN-dividend,dividend,SPX_dividend_return_weekly_1970_2026.csv,DATA-007,Spec default filename exists in input/data,SPX_dividend_return_weekly_1970_2026.csv,SPX_dividend_return_weekly_1970_2026.csv,PASS,
 A-MAN-cpi,cpi,CPIAUCNS.csv,DATA-004,Spec default filename exists in input/data,CPIAUCNS.csv,CPIAUCNS.csv,PASS,
 A-CPI-001,cpi,CPIAUCNS.csv,SCHEMA-007,Minimal columns,"observation_date,CPIAUCNS","observation_date,CPIAUCNS",PASS,
 A-CPI-002,cpi,CPIAUCNS.csv,NORM-015;SEM-010;REAL-002;TEST-028,Known empty month,"2025-10 empty, previous_available",2025-10-01,PASS,
 A-CPI-003,cpi,CPIAUCNS.csv,NORM-003,Monthly continuity,no missing months,0,PASS,
-A-STK-001,stocks_signal,US_STOCK_PRICE_WEEKLY_REAL_1919_2026.csv,SCHEMA-001,Minimal columns present,"week_start,price_index_continuous","week_start,price_index_continuous",PASS,
-A-STK-002,stocks_signal,US_STOCK_PRICE_WEEKLY_REAL_1919_2026.csv,NORM-008;NORM-007,week_start is Monday so week_end=week_start+4 is the Friday key,all Monday,"{""Mon"": 5568}",PASS,
-A-STK-003,stocks_signal,US_STOCK_PRICE_WEEKLY_REAL_1919_2026.csv,NORM-002,No duplicate week_start,0 duplicates,0,PASS,
-A-STK-004,stocks_signal,US_STOCK_PRICE_WEEKLY_REAL_1919_2026.csv,NORM-003;NORM-005;SIG-003;NORM-010,Weekly continuity of signal price history,no missing Friday keys,missing 1933-03-10,WARN,Q-012
-A-STK-005,stocks_signal,US_STOCK_PRICE_WEEKLY_REAL_1919_2026.csv,DATA-001;NORM-012;TEST-023,History start vs default filename/TEST-023,file name implies 1885; TEST-023 needs signal-only from 1920,first Friday key 1920-01-02,WARN,Q-011
-A-STK-006,stocks_signal,US_STOCK_PRICE_WEEKLY_REAL_1919_2026.csv,SEM-011;NORM-019;TEST-051,Partial last week row described by SEM-011 exists in file,week_start 2026-09-21 present,absent; last week_start 2026-09-14,WARN,Q-010
-A-STK-007,stocks_signal,US_STOCK_PRICE_WEEKLY_REAL_1919_2026.csv,NORM-006,All prices finite and positive,0 invalid,0,PASS,
-A-STK-008,stocks_signal,US_STOCK_PRICE_WEEKLY_REAL_1919_2026.csv,SEM-001,Schwert->SPX splice point,SPX from 1928,identical to Schwert until 1962-06-25; differs from 1962-07-02,FAIL,Q-004
-A-STK-009,stocks_signal,US_STOCK_PRICE_WEEKLY_REAL_1919_2026.csv,SEM-001;REP-008,File carries per-row source/segment metadata for the manifest,segment source and range recoverable,no source/segment column,FAIL,Q-004
+A-STK-001,stocks_signal,US_STOCK_PRICE_WEEKLY_1885_2026.csv,SCHEMA-001,Minimal columns present,"week_start|week_end,price_index_continuous","week_end,price_index_continuous,source,source_date",PASS,
+A-STK-002,stocks_signal,US_STOCK_PRICE_WEEKLY_1885_2026.csv,NORM-007;SCHEMA-001,week_end is the Friday key of the calendar week,all Friday,"{""Fri"": 5569}",PASS,
+A-STK-003,stocks_signal,US_STOCK_PRICE_WEEKLY_1885_2026.csv,NORM-002,No duplicate week_end,0 duplicates,0,PASS,
+A-STK-004,stocks_signal,US_STOCK_PRICE_WEEKLY_1885_2026.csv,NORM-003;NORM-005;SIG-003;NORM-010,Weekly continuity of signal price history,no missing Friday keys,missing 1933-03-10,WARN,Q-012
+A-STK-005,stocks_signal,US_STOCK_PRICE_WEEKLY_1885_2026.csv,DATA-001;NORM-012;TEST-023,History start vs default filename/TEST-023,file name implies 1885; TEST-023 needs signal-only from 1920,first Friday key 1920-01-02,WARN,Q-011
+A-STK-006,stocks_signal,US_STOCK_PRICE_WEEKLY_1885_2026.csv,SEM-011;NORM-019;TEST-051,Partial last week row described by SEM-011 exists in file,week 2026-09-21..2026-09-25 present,last row week_end 2026-09-25 source_date 2026-09-21,PASS,
+A-STK-007,stocks_signal,US_STOCK_PRICE_WEEKLY_1885_2026.csv,NORM-006,All prices finite and positive,0 invalid,0,PASS,
+A-STK-008,stocks_signal,US_STOCK_PRICE_WEEKLY_1885_2026.csv,SEM-001,Schwert->SPX splice point,"Schwert before 1928, SPX from 1928-01-06",Schwert 1920-01-02..1927-12-30 (418); SPX 1928-01-06..2026-09-25 (5151),PASS,Q-004
+A-STK-009,stocks_signal,US_STOCK_PRICE_WEEKLY_1885_2026.csv,SEM-001;REP-008,File carries per-row source/segment metadata for the manifest,segment source and range recoverable,"columns source, source_date",PASS,Q-004
+A-STK-010,stocks_signal,US_STOCK_PRICE_WEEKLY_1885_2026.csv,SEM-001,Schwert segment equals the supplemental Schwert file,0 differing prices,0 differing of 418,PASS,Q-004
+A-STK-011,stocks_signal,US_STOCK_PRICE_WEEKLY_1885_2026.csv,NORM-013;NORM-019,source_date inside the calendar week of week_end (metadata only),0 outside,"0; source_date weekdays {""Mon"": 5018, ""Tue"": 132, ""Wed"": 1, ""Thu"": 3, ""Fri"": 18, ""Sat"": 397}",PASS,
 A-FF-001,stocks_return,F-F_Research_Data_Factors_weekly.csv,SCHEMA-002;NORM-014;TEST-027,Non-data lines before first YYYYMMDD record,4 header lines (spec wording),"5 lines (4 preamble incl. blank + 1 column header); trailer lines [5232, 5233]",WARN,Q-021
 A-FF-002,stocks_return,F-F_Research_Data_Factors_weekly.csv,SCHEMA-002;ERR-002,Column header names,"date,Mkt-RF,RF","'','Mkt-RF','SMB','HML','RF'",WARN,Q-021
 A-FF-003,stocks_return,F-F_Research_Data_Factors_weekly.csv,NORM-013;TEST-025;TEST-026,Record weekdays (need same-calendar-week Friday mapping),Fri plus Sat/Thu/holiday dates,"{""Mon"": 1, ""Wed"": 3, ""Thu"": 152, ""Fri"": 3912, ""Sat"": 1158}",INFO,
@@ -28,8 +30,8 @@ A-FF-007,stocks_return,F-F_Research_Data_Factors_weekly.csv,SEM-002,First record
 A-FF-008,stocks_return,F-F_Research_Data_Factors_weekly.csv,PORT-001;PORT-002;TEST-007,Values are percent (need /100),|Mkt-RF| well above 1 in crashes,"Mkt-RF [-18.84,17.12] RF [-0.02,0.34]",PASS,
 A-FF-009,stocks_return,F-F_Research_Data_Factors_weekly.csv,NORM-006,All numeric fields parse,0 non-numeric,0,PASS,
 A-FF-010,stocks_return,F-F_Research_Data_Factors_weekly.csv,IND-014;TEST-032;PORT-013,Negative RF weeks exist (no tax credit rule is exercised by real data),info,"8 weeks: 1933-02-03,1933-02-10,1933-02-17,1933-02-24,1938-11-04,1938-11-11,1938-11-18,1938-11-25",INFO,
-A-FF-011,stocks_return,F-F_Research_Data_Factors_weekly.csv,NORM-018;NORM-013;NORM-008,Correlation FF (Mkt-RF+RF) vs stock price index returns,"high on same-calendar-week index, low on shifted index",same-week 0.9902 (n=5225); naive 0.5913; to 1952: 0.9923 vs 0.09993,PASS,
-A-X-001,cross,F-F_Research_Data_Factors_weekly.csv|US_STOCK_PRICE_WEEKLY_REAL_1919_2026.csv,NORM-007;NORM-011,Friday keys of FF and stock signal agree over the FF range,identical key sets,FF-only 0; stocks-only 0,PASS,
+A-FF-011,stocks_return,F-F_Research_Data_Factors_weekly.csv,NORM-018;NORM-013;NORM-008,Correlation FF (Mkt-RF+RF) vs stock price index returns,"high on same-calendar-week index, low on shifted index",same-week 0.9575 (n=5225); naive 0.6501; to 1952: 0.9186 vs 0.2107,PASS,
+A-X-001,cross,F-F_Research_Data_Factors_weekly.csv|US_STOCK_PRICE_WEEKLY_1885_2026.csv,NORM-007;NORM-011,Friday keys of FF and stock signal agree over the FF range,identical key sets,FF-only 0; stocks-only 0,PASS,
 A-GLD-001,gold,GOLD_REAL_weekly_1970_2026.csv,SCHEMA-003;NORM-007,Date column,week_end (Friday),"week_start ({""Mon"": 2959})",FAIL,Q-003
 A-GLD-002,gold,GOLD_REAL_weekly_1970_2026.csv,SEM-003;DATA-003;SIG-009,Price source is LBMA Gold Price PM,LBMA PM,"sources {""FOREXCOM_FILL"": 26, ""OANDA"": 2671, ""TVC"": 262}",FAIL,Q-002
 A-GLD-003,gold,GOLD_REAL_weekly_1970_2026.csv,SEM-003,History start,LBMA PM from 1968,first Friday key 1970-01-09,FAIL,Q-002;Q-013
@@ -46,14 +48,17 @@ A-BTC-005,btc,BTC_REAL_weekly_2010_2026.csv,NORM-003;NORM-004;NORM-005;TEST-039,
 A-BTC-006,btc,BTC_REAL_weekly_2010_2026.csv,SCHEMA-004;PORT-004,weekly_return equals price_t/price_t-1-1,|diff|<=1e-08,mismatches 0; empty ['2010-07-12'],PASS,
 A-X-003,cross,BTC_REAL_weekly_2010_2026.csv|F-F_Research_Data_Factors_weekly.csv,NORM-007;NORM-017,BTC Friday keys (date+4) agree with FF keys in overlap,identical,FF-only ['2011-06-24']; BTC-only 0,WARN,Q-006
 A-BTC-007,btc,BTC_REAL_weekly_2010_2026.csv,NORM-019;NORM-016;SEM-009;META-003,Friday-key completeness rule vs Sunday availability,a week counted as complete only when its close is known,with as_of=Saturday 2026-09-26 the week 2026-09-25 passes NORM-019 but its close_date 2026-09-27 is after as_of,WARN,Q-007
-A-DIV-001,dividend,SPX_dividend_return_weekly_shiller.csv,SCHEMA-005;ERR-002,Columns listed in SCHEMA-005,"date,dividend_return,dividend_points,spx_close_prev,spx_close,year,annual_yield_pct,trailing_dps_points,status","missing spx_close,year,annual_yield_pct,trailing_dps_points",FAIL,Q-008
-A-DIV-002,dividend,SPX_dividend_return_weekly_shiller.csv,SEM-007;DIV-012;TEST-038,Dates are Friday,all Friday,"{""Fri"": 5218}",PASS,
-A-DIV-003,dividend,SPX_dividend_return_weekly_shiller.csv,SEM-007;DIV-012;TEST-038;NORM-003,Weekly continuity,no gaps,0,PASS,
-A-DIV-004,dividend,SPX_dividend_return_weekly_shiller.csv,SEM-007;TEST-038,Range,1970-01-02..2026-09-18,1926-07-02..2026-06-26 (9 FF weeks after last dividend row),FAIL,Q-009
-A-DIV-005,dividend,SPX_dividend_return_weekly_shiller.csv,SEM-007;DIV-011,status values,"actual until 2025-12-26, estimate in 2026","{""estimate"": 5218}",FAIL,Q-008
-A-DIV-006,dividend,SPX_dividend_return_weekly_shiller.csv,SCHEMA-005;DIV-012;SEM-007;TEST-038,dividend_return == dividend_points/spx_close_prev,rel err <= 1e-09,max rel err 2.11e-16,PASS,
-A-DIV-007,dividend,SPX_dividend_return_weekly_shiller.csv,DIV-009;SEM-007,Smoothing granularity,smoothed weekly share of annual/trailing DPS,"dividend_return constant within month for 1200/1200 months (monthly yield, Shiller-style)",WARN,Q-008
-A-DIV-008,dividend,SPX_dividend_return_weekly_shiller.csv,NORM-007;DIV-005,spx_close_prev equals stock signal index at previous Friday key,alignment evidence,exact 5217/5217; no prior index week ['1933-03-17'],PASS,
-A-DIV-009,dividend,SPX_dividend_return_weekly_shiller.csv,NORM-007;NORM-011,Dividend weeks outside FF calendar,none,1933-03-10,INFO,
-A-X-004,cross,US_STOCK_PRICE_WEEKLY_REAL_1919_2026.csv,SIG-002;DATA-001,Stock index is nominal (the word REAL in the file name is not deflation),"index growth close to FF implied price growth, not divided by CPI",1926-07-02..2026-06-26: index x529.15; FF total-minus-dividend x459.9; CPI x19.08,INFO,
-A-X-005,cross,all,NORM-011;RUN-002;TEST-022,Last complete Friday key per source (common end is the minimum of used sources),explicit truncation report,"{""stocks_signal"": ""2026-09-18"", ""stocks_return"": ""2026-08-28"", ""gold"": ""2026-09-18"", ""btc"": ""2026-09-25"", ""dividend"": ""2026-06-26""}",INFO,Q-009
+A-DIV-001,dividend,SPX_dividend_return_weekly_1970_2026.csv,SCHEMA-005;ERR-002,Columns listed in SCHEMA-005,"date,dividend_return,dividend_points,spx_close_prev,spx_close,year,annual_yield_pct,trailing_dps_points,status","date,dividend_return,dividend_points,spx_close_prev,spx_close,year,annual_yield_pct,trailing_dps_points,status",PASS,Q-008
+A-DIV-002,dividend,SPX_dividend_return_weekly_1970_2026.csv,SEM-007;DIV-012;TEST-038,Dates are Friday,all Friday,"{""Fri"": 2960}",PASS,
+A-DIV-003,dividend,SPX_dividend_return_weekly_1970_2026.csv,SEM-007;DIV-012;TEST-038;NORM-003,Weekly continuity,"no gaps, no duplicates","0 gaps, 0 duplicates",PASS,
+A-DIV-004,dividend,SPX_dividend_return_weekly_1970_2026.csv,SEM-007;TEST-038,Range,1970-01-02..2026-09-18,1970-01-02..2026-09-18 (2960 rows; 0 FF weeks after last dividend row),PASS,Q-009
+A-DIV-005,dividend,SPX_dividend_return_weekly_1970_2026.csv,SEM-007;DIV-011,status values,"actual until 2025-12-26, estimate in 2026","[[""actual"", ""1970-01-02"", ""2025-12-26""], [""estimate"", ""2026-01-02"", ""2026-09-18""]] {""actual"": 2922, ""estimate"": 38}",PASS,Q-008
+A-DIV-006,dividend,SPX_dividend_return_weekly_1970_2026.csv,SCHEMA-005;DIV-012;SEM-007;TEST-038,dividend_return == dividend_points/spx_close_prev,rel err <= 1e-09,max rel err 0,PASS,
+A-DIV-007,dividend,SPX_dividend_return_weekly_1970_2026.csv,DIV-009;SEM-007,Smoothing granularity,smoothed weekly share of annual/trailing DPS,"dividend_points = trailing_dps_points / Fridays in year, max rel err 0",PASS,Q-008
+A-DIV-008,dividend,SPX_dividend_return_weekly_1970_2026.csv,NORM-007;DIV-005;SEM-001,spx_close/spx_close_prev equal the stock signal index at the Friday key / previous key,exact,exact 2960/2960; no prior index week [],PASS,
+A-DIV-009,dividend,SPX_dividend_return_weekly_1970_2026.csv,NORM-007;NORM-011,Dividend weeks outside FF calendar,none,none,INFO,
+A-DIV-010,dividend,SPX_dividend_return_weekly_1970_2026.csv,SCHEMA-005,year == date.year,0 mismatches,0,PASS,
+A-STG-stocks_signal,stocks_signal,US_STOCK_PRICE_WEEKLY_REAL_1919_2026.csv,DATA-001,Superseded staged proxy (not used by the default resolution),canonical US_STOCK_PRICE_WEEKLY_1885_2026.csv used,5568 rows 1919-12-29..2026-09-14,INFO,Q-004
+A-STG-dividend,dividend,SPX_dividend_return_weekly_shiller.csv,DATA-007,Superseded staged proxy (not used by the default resolution),canonical SPX_dividend_return_weekly_1970_2026.csv used,5218 rows 1926-07-02..2026-06-26,INFO,Q-008
+A-X-004,cross,US_STOCK_PRICE_WEEKLY_1885_2026.csv,SIG-002;DATA-001,Stock index is nominal (the word REAL in the file name is not deflation),"index growth close to FF implied price growth, not divided by CPI",1970-01-02..2026-08-28: index x82.922; FF total-minus-dividend x85.456; CPI x8.862,INFO,
+A-X-005,cross,all,NORM-011;RUN-002;TEST-022,Last complete Friday key per source (common end is the minimum of used sources),explicit truncation report,"{""stocks_signal"": ""2026-09-25"", ""stocks_return"": ""2026-08-28"", ""gold"": ""2026-09-18"", ""btc"": ""2026-09-25"", ""dividend"": ""2026-09-18""}",INFO,Q-009

@@ -253,9 +253,9 @@ def test_missing_data_file_error(tmp_path):
 
 def test_cli_009_band_rebalance(tmp_path):
     """CLI-009 / S07: the exact band 1 pp command runs end to end through the CLI: band
-    rebalance events (1 pp trigger), summary.csv and every standard output. The staged
-    gold/stocks proxies stay reported as provenance warnings (Q-002/Q-004 DATA BLOCKER, separate
-    rows SEM-001/SEM-003); this test proves the command mechanics."""
+    rebalance events (1 pp trigger), summary.csv and every standard output. The staged gold
+    proxy stays reported as a provenance warning (Q-002 DATA BLOCKER, separate row SEM-003);
+    the stock signal is the canonical SEM-001 file (Q-004 resolved) and raises none."""
     r = cli("run", "--weights", "stocks=0.6,gold=0.2,btc=0.2", "--rebalance", "band",
             "--rebalance-band-pp", "1", "--start", "2018-01-01", "--end", "2026-07-31",
             "--output-dir", str(tmp_path))
@@ -276,9 +276,9 @@ def test_cli_009_band_rebalance(tmp_path):
     assert s["cagr"] and s["max_drawdown"] and int(s["trade_count"]) > 0
     prov = {(x["role"], x["code"]) for x in read_csv(out / "validation_report.csv")
             if x["code"] == "provenance"}
-    assert {("gold", "provenance"), ("stocks_price", "provenance")} <= prov
+    assert ("gold", "provenance") in prov and ("stocks_price", "provenance") not in prov
     report = (out / "validation_report.csv").read_text()
-    assert "Q-002" in report and "SEM-001" in report
+    assert "Q-002" in report and "SEM-001 provenance not satisfied" not in report
 
 
 def test_cli_individual_pl_run(tmp_path):

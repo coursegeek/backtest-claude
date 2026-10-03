@@ -5,6 +5,7 @@ import math
 
 import pytest
 
+from fixtures.builders import staged_proxy_layer
 from src import metrics
 from src.app import run_portfolio
 from src.config import ResolvedConfig
@@ -204,8 +205,10 @@ def test_foundation_shadow_final_cost():
 
 def test_existing_profiles_unchanged_by_base_split():
     """Q-033 refactor regression: none and individual_pl keep growth base = path start = initial
-    capital and the values produced before the refactor (staged data, quarterly, 10+5 bps,
-    2018-01-01..2026-07-31)."""
+    capital and the values produced before the refactor (quarterly, 10+5 bps,
+    2018-01-01..2026-07-31). Mechanics regression with values frozen on the staged data: the
+    superseded staged stock-signal and dividend proxies are pinned explicitly
+    (work/config/staged_proxy_data.yaml), independent of the canonical defaults."""
     base = {"allocation": {"targets": "stocks=0.6,gold=0.2,btc=0.2"},
             "run": {"start": "2018-01-01", "end": "2026-07-31", "as_of_date": "2026-09-29"},
             "portfolio": {"rebalance": "quarterly", "transaction_cost_bps": 10.0, "slippage_bps": 5.0}}
@@ -223,6 +226,7 @@ def test_existing_profiles_unchanged_by_base_split():
     for profile, values in expected.items():
         layer = {k: dict(v) for k, v in base.items()}
         layer["tax"] = {"profile": profile}
+        layer["data"] = staged_proxy_layer()["data"]
         m = run_portfolio(ResolvedConfig("run", cli_layer=layer), write=False).metrics
         assert m.growth_base_nav == m.path_start_nav == m.nav_start == 1_000_000.0
         for k, v in values.items():

@@ -11,6 +11,22 @@ from src.models import PricePoint, PriceSeries, Provenance
 REPO = Path(__file__).resolve().parents[3]
 STAGED = REPO / "input" / "data"
 WEEK = dt.timedelta(days=7)
+# The superseded staged stock-signal and dividend proxies, pinned explicitly for mechanics
+# regression tests whose expected values were frozen on them (the default resolution uses the
+# canonical files since Q-004/Q-008).
+STAGED_PROXY_CONFIG = REPO / "work" / "config" / "staged_proxy_data.yaml"
+
+
+def staged_proxy_layer() -> dict:
+    """The ``data`` layer of work/config/staged_proxy_data.yaml (merge into a cli_layer)."""
+    import yaml
+    return yaml.safe_load(STAGED_PROXY_CONFIG.read_text(encoding="utf-8"))
+
+
+def staged_proxy_overrides() -> dict:
+    """The same pinning as dotted keys for ResolvedConfig.with_overrides."""
+    data = staged_proxy_layer()["data"]
+    return {f"data.{k}": v for k, v in data.items()}
 
 
 def d(s):

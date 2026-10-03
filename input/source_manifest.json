@@ -11,7 +11,8 @@
       "staged_path": "input/python_backtest_specification_v3_1.csv",
       "bytes": 80524,
       "git_blob_sha1": "b0e5fdcd123155279f2137e10ddedc809477b263",
-      "sha256": "a7f73bfd6c6163167d91d37f3835f4c541da1407960624bd214bd93ba97c37d1"
+      "sha256": "a7f73bfd6c6163167d91d37f3835f4c541da1407960624bd214bd93ba97c37d1",
+      "data_status": "specification"
     },
     {
       "role": "btc_raw_input",
@@ -19,7 +20,9 @@
       "staged_path": "input/data/BTC_REAL_weekly_2010_2026.csv",
       "bytes": 73728,
       "git_blob_sha1": "17d9d3e57181dbbabb8bcdc1c84106b1beea8d69",
-      "sha256": "147ae79a6973d5b2d175c85cd6502f1e6647e7fa1629b49175842612316f2f26"
+      "sha256": "147ae79a6973d5b2d175c85cd6502f1e6647e7fa1629b49175842612316f2f26",
+      "data_status": "canonical",
+      "data_status_note": "raw Monday-Sunday file normalised to Friday keys by the canonical adapter (Q-005)"
     },
     {
       "role": "cpi_input",
@@ -27,7 +30,8 @@
       "staged_path": "input/data/CPIAUCNS.csv",
       "bytes": 25074,
       "git_blob_sha1": "15297bfc83b487cbd07d584da7c1402b6453504e",
-      "sha256": "f79e3a78837142293449cee4a1a9b1da7be677fb3e989ffb2ef48e8e7cf4cdd7"
+      "sha256": "f79e3a78837142293449cee4a1a9b1da7be677fb3e989ffb2ef48e8e7cf4cdd7",
+      "data_status": "canonical"
     },
     {
       "role": "stocks_return_input",
@@ -35,7 +39,8 @@
       "staged_path": "input/data/F-F_Research_Data_Factors_weekly.csv",
       "bytes": 240788,
       "git_blob_sha1": "b83cbb6ee0b1064c708d10cb3d6d4ad91c5cb495",
-      "sha256": "0f3a628d7c1c9099e29b981f75ae39386196d2e8205cc6c7edfc0487942abd6f"
+      "sha256": "0f3a628d7c1c9099e29b981f75ae39386196d2e8205cc6c7edfc0487942abd6f",
+      "data_status": "canonical"
     },
     {
       "role": "gold_raw_input",
@@ -43,7 +48,9 @@
       "staged_path": "input/data/GOLD_REAL_weekly_1970_2026.csv",
       "bytes": 134949,
       "git_blob_sha1": "b3d823df33b8dc96a994f77b280c5de986ddf136",
-      "sha256": "5105a0f58b24005cfb3c63e924e954309a374c48380ed6efa4702db25e15eacc"
+      "sha256": "5105a0f58b24005cfb3c63e924e954309a374c48380ed6efa4702db25e15eacc",
+      "data_status": "proxy",
+      "data_status_note": "TVC/OANDA non-LBMA gold proxy; DATA_BLOCKER Q-002 / SEM-003"
     },
     {
       "role": "dividend_raw_input",
@@ -51,7 +58,9 @@
       "staged_path": "input/data/SPX_dividend_return_weekly_shiller.csv",
       "bytes": 384113,
       "git_blob_sha1": "03f970d520c32b0ee80f7f82320f908135ae8b48",
-      "sha256": "d659a1c2d2ba0166777381dc58524ed203dd7d0d76152eabade0b5fa3b386e37"
+      "sha256": "d659a1c2d2ba0166777381dc58524ed203dd7d0d76152eabade0b5fa3b386e37",
+      "data_status": "proxy",
+      "data_status_note": "staged Shiller proxy without the SCHEMA-005 columns; superseded by the canonical dividend file (Q-008 resolved)"
     },
     {
       "role": "stocks_signal_raw_input",
@@ -59,7 +68,9 @@
       "staged_path": "input/data/US_STOCK_PRICE_WEEKLY_REAL_1919_2026.csv",
       "bytes": 150448,
       "git_blob_sha1": "df4af5538911b1a1ffe3af36850d19d17f06dcf3",
-      "sha256": "e3b3f06f1c5b0017b79d4cb32b925d4e998d0d58973e35dd0675953ed51a56a5"
+      "sha256": "e3b3f06f1c5b0017b79d4cb32b925d4e998d0d58973e35dd0675953ed51a56a5",
+      "data_status": "proxy",
+      "data_status_note": "staged Schwert->SPX splice in 1962 without source metadata; superseded by the canonical stock signal file (Q-004 resolved)"
     },
     {
       "role": "supplemental_schwert_source",
@@ -67,7 +78,62 @@
       "staged_path": "input/data/US_STOCK_PRICE_WEEKLY_schwert_1919_1962.csv",
       "bytes": 58027,
       "git_blob_sha1": "c38147a009301a4b54b031e5cbb9ff7d0f2b67b9",
-      "sha256": "4d0f91bd40ba6dccb79fd4d5cb58e813aec3c27ceefc49c0cadf770025360901"
+      "sha256": "4d0f91bd40ba6dccb79fd4d5cb58e813aec3c27ceefc49c0cadf770025360901",
+      "data_status": "supplemental",
+      "data_status_note": "Schwert derivative 1919-1962; cross-check evidence for the canonical Schwert segment"
+    },
+    {
+      "role": "stocks_signal_canonical_input",
+      "source_repo_path": null,
+      "staged_path": "input/data/US_STOCK_PRICE_WEEKLY_1885_2026.csv",
+      "bytes": 251574,
+      "git_blob_sha1": "ff451bf00dcec7f4f2d85be9840e166ea736fff8",
+      "sha256": "af1da27aa7d8dc689cb5d2f57f4a9c37e70f95fab18514a5f3087b98078987bd",
+      "data_status": "canonical",
+      "data_status_note": "DATA-001 default; Schwert before 1928, TradingView SPX from 1928 rebased at 1927-12-30 (SEM-001, Q-004)"
+    },
+    {
+      "role": "stocks_signal_provenance",
+      "source_repo_path": null,
+      "staged_path": "input/data/US_STOCK_PRICE_WEEKLY_1885_2026.csv.provenance.json",
+      "bytes": 5581,
+      "git_blob_sha1": "fa2d6939f12a7b43646a6c1035b4c3eb021afff6",
+      "sha256": "57966c445b8d2687a125394d37c054fbc0e91cd917d302456e93d28abd60c2d8",
+      "data_status": "provenance",
+      "data_status_note": "build metadata of the canonical stock signal file (raw SHA-256, method, rebase, segments)"
+    },
+    {
+      "role": "dividend_canonical_input",
+      "source_repo_path": null,
+      "staged_path": "input/data/SPX_dividend_return_weekly_1970_2026.csv",
+      "bytes": 408388,
+      "git_blob_sha1": "2702bcd22040438e61afb2f541b0d0226dfeec71",
+      "sha256": "a62191993c42a5692072323d34947d2095b0e5ca162ca63c23ed91ebba7e8cf5",
+      "data_status": "canonical",
+      "data_status_note": "DATA-007 default; SCHEMA-005 smoothed weekly dividend series 1970-01-02..2026-09-18 (SEM-007, Q-008)"
+    },
+    {
+      "role": "dividend_provenance",
+      "source_repo_path": null,
+      "staged_path": "input/data/SPX_dividend_return_weekly_1970_2026.csv.provenance.json",
+      "bytes": 4548,
+      "git_blob_sha1": "07b97c1152d41c2fc9075fbff50758fe4b648727",
+      "sha256": "a02d68878c58f2bacadab9bf710e8ade6aef1e59250a787bfc8d9aa121f13793",
+      "data_status": "provenance",
+      "data_status_note": "build metadata of the canonical dividend file (Shiller fields, smoothing, 2026 estimate)"
     }
-  ]
+  ],
+  "canonical_data_update": {
+    "added_in": "clean-room session 15 (data handoff)",
+    "files": [
+      "input/data/US_STOCK_PRICE_WEEKLY_1885_2026.csv",
+      "input/data/SPX_dividend_return_weekly_1970_2026.csv"
+    ],
+    "questions_resolved": [
+      "Q-004",
+      "Q-008"
+    ],
+    "verification": "work/tools/verify_canonical_data.py -> work/audit/canonical_data_checks.csv",
+    "policy": "staged proxies stay for development compatibility; the specification default file names resolve to the canonical files directly (no alias)"
+  }
 }

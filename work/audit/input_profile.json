@@ -3,37 +3,46 @@
   "as_of_date": "2026-09-29",
   "audit_assumptions": [
     "Friday key = Monday-Sunday calendar week Friday (NORM-007).",
-    "week_start files (stocks, gold, BTC date) mapped with +4 days (NORM-008 analogue).",
+    "week_start files (gold, BTC date) mapped with +4 days (NORM-008 analogue); the canonical stock file is week_end keyed.",
     "First return week = first Friday key >= --start (see Q-014).",
     "Warm-up = ma + confirm + max(delay) contiguous weeks before first return week (NORM-010).",
     "Dividend file needed only if stocks active, tax profile != none, smoothed_weekly (Q-009)."
   ],
   "manifest": {
-    "files": 8,
+    "files": 12,
     "mismatches": []
   },
   "sources": {
     "stocks_signal": {
-      "file": "US_STOCK_PRICE_WEEKLY_REAL_1919_2026.csv",
-      "sha256": "e3b3f06f1c5b0017b79d4cb32b925d4e998d0d58973e35dd0675953ed51a56a5",
-      "bytes": 150448,
-      "line_endings": "LF",
+      "file": "US_STOCK_PRICE_WEEKLY_1885_2026.csv",
+      "sha256": "af1da27aa7d8dc689cb5d2f57f4a9c37e70f95fab18514a5f3087b98078987bd",
+      "bytes": 251574,
+      "line_endings": "CRLF",
       "columns": [
-        "week_start",
-        "price_index_continuous"
+        "week_end",
+        "price_index_continuous",
+        "source",
+        "source_date"
       ],
-      "rows": 5568,
-      "date_column": "week_start",
+      "rows": 5569,
+      "date_column": "week_end",
       "date_encoding": "ISO YYYY-MM-DD",
       "date_weekdays": {
-        "Mon": 5568
+        "Fri": 5569
       },
-      "first_week_start": "1919-12-29",
-      "last_week_start": "2026-09-14",
+      "source_date_weekdays": {
+        "Mon": 5018,
+        "Tue": 132,
+        "Wed": 1,
+        "Thu": 3,
+        "Fri": 18,
+        "Sat": 397
+      },
       "first_friday_key": "1920-01-02",
-      "last_friday_key": "2026-09-18",
+      "last_friday_key": "2026-09-25",
+      "last_source_date": "2026-09-21",
       "step_days": {
-        "7": 5566,
+        "7": 5567,
         "14": 1
       },
       "gaps": [
@@ -48,25 +57,27 @@
       ],
       "duplicate_dates": [],
       "non_positive_prices": 0,
-      "min_price": "103.455924043",
-      "max_price": "180601.803918",
+      "min_price": "102.498753514",
+      "max_price": "180959.341306",
+      "source_segments": [
+        {
+          "source": "Schwert",
+          "from_key": "1920-01-02",
+          "to_key": "1927-12-30",
+          "rows": 418
+        },
+        {
+          "source": "SPX",
+          "from_key": "1928-01-06",
+          "to_key": "2026-09-25",
+          "rows": 5151
+        }
+      ],
+      "source_date_outside_week": 0,
       "schwert_overlap": {
         "schwert_file": "US_STOCK_PRICE_WEEKLY_schwert_1919_1962.csv",
-        "identical_until_week_start": "1962-06-25",
-        "first_different_week_start": "1962-07-02",
-        "inferred_segments": [
-          {
-            "source": "Schwert (identical to supplemental file)",
-            "week_start_from": "1919-12-29",
-            "week_start_to": "1962-06-25"
-          },
-          {
-            "source": "non-Schwert (presumably SPX, rebased)",
-            "week_start_from": "1962-07-02",
-            "week_start_to": "2026-09-14"
-          }
-        ],
-        "segment_column_in_file": false
+        "differing_schwert_weeks": [],
+        "segment_column_in_file": true
       }
     },
     "stocks_return": {
@@ -182,12 +193,12 @@
       ],
       "zero_rf_weeks": 923,
       "alignment_vs_stock_index": {
-        "same_week_corr": "0.99025",
+        "same_week_corr": "0.957461",
         "same_week_n": 5225,
-        "naive_corr": "0.591259",
+        "naive_corr": "0.650088",
         "naive_n": 5162,
-        "same_week_corr_to_1952": "0.992292",
-        "naive_corr_to_1952": "0.0999317"
+        "same_week_corr_to_1952": "0.918648",
+        "naive_corr_to_1952": "0.210744"
       }
     },
     "gold": {
@@ -346,50 +357,57 @@
       }
     },
     "dividend": {
-      "file": "SPX_dividend_return_weekly_shiller.csv",
-      "sha256": "d659a1c2d2ba0166777381dc58524ed203dd7d0d76152eabade0b5fa3b386e37",
-      "bytes": 384113,
-      "line_endings": "LF",
+      "file": "SPX_dividend_return_weekly_1970_2026.csv",
+      "sha256": "a62191993c42a5692072323d34947d2095b0e5ca162ca63c23ed91ebba7e8cf5",
+      "bytes": 408388,
+      "line_endings": "CRLF",
       "columns": [
         "date",
         "dividend_return",
         "dividend_points",
         "spx_close_prev",
-        "status"
-      ],
-      "missing_spec_columns": [
         "spx_close",
         "year",
         "annual_yield_pct",
-        "trailing_dps_points"
+        "trailing_dps_points",
+        "status"
       ],
-      "rows": 5218,
+      "missing_spec_columns": [],
+      "rows": 2960,
       "date_encoding": "ISO YYYY-MM-DD",
       "date_weekdays": {
-        "Fri": 5218
+        "Fri": 2960
       },
-      "first_date": "1926-07-02",
-      "last_date": "2026-06-26",
+      "first_date": "1970-01-02",
+      "last_date": "2026-09-18",
       "step_days": {
-        "7": 5217
+        "7": 2959
       },
       "gaps": [],
       "duplicate_dates": [],
       "status_counts": {
-        "estimate": 5218
+        "actual": 2922,
+        "estimate": 38
       },
-      "formula_max_rel_error": "2.11e-16",
-      "months": 1200,
-      "months_with_constant_dividend_return": 1200,
-      "spx_close_prev_linked_to_stock_index": "5217/5217",
-      "rows_without_stock_index_prev_week": [
-        "1933-03-17"
+      "status_blocks": [
+        [
+          "actual",
+          "1970-01-02",
+          "2025-12-26"
+        ],
+        [
+          "estimate",
+          "2026-01-02",
+          "2026-09-18"
+        ]
       ],
-      "rows_not_in_ff_calendar": [
-        "1933-03-10"
-      ],
-      "rows_from_1970_01_02": 2948,
-      "ff_weeks_after_last_dividend": 9
+      "formula_max_rel_error": "0",
+      "year_mismatches": 0,
+      "smoothing_max_rel_error": "0",
+      "spx_close_linked_to_stock_index": "2960/2960",
+      "rows_without_stock_index_prev_week": [],
+      "rows_not_in_ff_calendar": [],
+      "ff_weeks_after_last_dividend": 0
     },
     "cpi": {
       "file": "CPIAUCNS.csv",
@@ -421,18 +439,45 @@
       "default_config_key": "none (DATA_MAP)"
     }
   },
+  "superseded_staged_proxies": {
+    "stocks_signal": {
+      "file": "US_STOCK_PRICE_WEEKLY_REAL_1919_2026.csv",
+      "sha256": "e3b3f06f1c5b0017b79d4cb32b925d4e998d0d58973e35dd0675953ed51a56a5",
+      "rows": 5568,
+      "columns": [
+        "week_start",
+        "price_index_continuous"
+      ],
+      "first_date": "1919-12-29",
+      "last_date": "2026-09-14"
+    },
+    "dividend": {
+      "file": "SPX_dividend_return_weekly_shiller.csv",
+      "sha256": "d659a1c2d2ba0166777381dc58524ed203dd7d0d76152eabade0b5fa3b386e37",
+      "rows": 5218,
+      "columns": [
+        "date",
+        "dividend_return",
+        "dividend_points",
+        "spx_close_prev",
+        "status"
+      ],
+      "first_date": "1926-07-02",
+      "last_date": "2026-06-26"
+    }
+  },
   "nominal_vs_real": {
-    "from": "1926-07-02",
-    "to": "2026-06-26",
-    "index_growth": "529.15078",
-    "ff_minus_dividend_growth": "459.90263",
-    "cpi_growth": "19.082971"
+    "from": "1970-01-02",
+    "to": "2026-08-28",
+    "index_growth": "82.922151",
+    "ff_minus_dividend_growth": "85.455735",
+    "cpi_growth": "8.8619048"
   },
   "completeness_norm019": {
     "stocks_signal": {
-      "last_friday_key": "2026-09-18",
+      "last_friday_key": "2026-09-25",
       "rows_after_as_of": 0,
-      "rows_after_norm019_example": 0
+      "rows_after_norm019_example": 1
     },
     "stocks_return": {
       "last_friday_key": "2026-08-28",
@@ -450,7 +495,7 @@
       "rows_after_norm019_example": 1
     },
     "dividend": {
-      "last_friday_key": "2026-06-26",
+      "last_friday_key": "2026-09-18",
       "rows_after_as_of": 0,
       "rows_after_norm019_example": 0
     }

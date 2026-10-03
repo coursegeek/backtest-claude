@@ -1,6 +1,8 @@
 """tax-compare (TAX-003, FND-008, CLI-006, ALLOC-001, REP-002, REP-012, REP-017, REP-019,
-REPRO-006, Q-023) on the frozen clean-room S06 config and the staged data - mechanics
-validation only: stocks, gold and the dividend file are staged proxies (Q-002, Q-004, Q-008).
+REPRO-006, Q-023) on the frozen clean-room S06 config and the clean-room data: canonical stock
+signal and dividend files (Q-004/Q-008 resolved), gold is still the staged proxy (Q-002).
+The calendar-superset mechanics that needs a dividend file ending before the requested end is
+proven on the superseded staged dividend proxy, pinned explicitly.
 
 The command is an orchestrator of the production run pipeline: one shared prepared input
 (superset of the data requirements of all profiles), one run_prepared per profile, one
@@ -14,11 +16,12 @@ from pathlib import Path
 
 import pytest
 
+from fixtures.builders import staged_proxy_layer, staged_proxy_overrides
 from src import app
 from src import tax_compare as tc
 from src.cli import resolve
 from src.config import ResolvedConfig
-from src.errors import ConfigError, InsolvencyError, NotImplementedCommand
+from src.errors import ConfigError, InsolvencyError
 from src.reporting import SUMMARY_FIELDS, fmt, summary_row
 
 WORK = Path(__file__).resolve().parents[2]
@@ -108,8 +111,9 @@ def test_foundation_terminal_results_differ_only_at_distribution(s06):
 
 # ------------------------------------------------------------------ shared input
 def test_shared_effective_calendar_across_profiles(s06):
-    """Q-023 common calendar rule: the dividend source bounds the calendar of every profile,
-    tax.profile=none included (it gets no longer period than the taxed profiles)."""
+    """Q-023 common calendar rule: the dividend source (required by the taxed profiles) is part
+    of the one calendar of every profile, tax.profile=none included (it gets no longer period
+    than the taxed profiles)."""
     res, rows, manifest = s06
     keys = ("effective_first_week", "effective_last_week", "weeks", "inception_date",
             "elapsed_days", "common_data_start", "common_data_end", "range_truncation_detail",
@@ -126,20 +130,26 @@ def test_shared_effective_calendar_across_profiles(s06):
     assert manifest["shared_dividend_mode"] == "smoothed_weekly"
     assert manifest["effective_last_week"] == rows["none"]["effective_last_week"]
     assert manifest["weeks"] == int(rows["none"]["weeks"]) == len(weeks["none"])
-    # the dividend proxy ends before the requested end: the common range is truncated for all
-    assert "dividend" in rows["none"]["range_truncation_detail"] or \
-        rows["none"]["common_data_end"] < "2026-07-31"
+    # canonical dividends reach 2026-09-18: the requested end 2026-07-31 is kept for all
+    assert rows["none"]["effective_last_week"] == "2026-07-31"
+    assert rows["none"]["common_data_end"] >= "2026-07-31"
     assert all(manifest["checks"][k] for k in ("same_effective_first_week",
                                                 "same_effective_last_week", "same_weeks",
                                                 "same_dropped_weeks"))
 
 
-def test_none_alone_would_run_longer(s06, tmp_path):
+def test_none_alone_would_run_longer(tmp_path):
     """Why the superset matters: a standalone 'run' of tax.profile=none needs no dividend file
-    and keeps a longer calendar; inside tax-compare it shares the common calendar."""
-    _, rows, _ = s06
+    and keeps a longer calendar; inside tax-compare it shares the common calendar. Mechanics
+    proven on the superseded staged dividend proxy (ends 2026-06-26, before the requested end),
+    pinned explicitly; the canonical file reaches 2026-09-18 and no longer truncates S06."""
+    staged = staged_proxy_overrides()
+    res = tc.run_tax_compare(base_cfg(tmp_path / "staged").with_overrides(staged))
+    rows = {r["tax_profile"]: r for r in read_csv(res.output_dir / "summary.csv")}
+    assert rows["none"]["effective_last_week"] == "2026-06-26"
     alone = app.run_portfolio(ResolvedConfig("run", file_layer=_s06_layer(),
-                                             cli_layer={"tax": {"profile": "none"}}), write=False)
+                                             cli_layer={"tax": {"profile": "none"}, **staged_proxy_layer()}),
+                              write=False)
     assert alone.engine.weeks[-1].week_key.isoformat() > rows["none"]["effective_last_week"]
     assert len(alone.engine.weeks) > int(rows["none"]["weeks"])
 

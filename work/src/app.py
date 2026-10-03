@@ -445,6 +445,13 @@ def build_run(cfg: ResolvedConfig, dividend_mode: Optional[str] = None,
     if div_mode != "none":
         div_series, div_points = load_dividend_input(cfg, div_mode, report)
         if div_mode == "smoothed_weekly":                              # a required source
+            # NORM-019 like every other source: weeks after min(end, as_of) are not part of
+            # its range (otherwise a file reaching past run.end reports a false truncation)
+            kept, d_div = apply_completion(div_points, "dividend", as_of, cfg.end)
+            if kept:
+                div_points = kept
+                report.extend(d_div)
+                dropped += len(d_div)
             ranges["dividend"] = (div_points[0].week_key, div_points[-1].week_key)
     start, end, truncations = common_range(ranges)
     for role, side, own, eff in truncations:

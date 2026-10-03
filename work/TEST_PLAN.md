@@ -13,7 +13,8 @@ requirement ID; mapa wymaganie → test jest w `work/compliance_matrix.csv` (kol
   * `tests/spec/` — TEST-001..TEST-054 (1 funkcja = 1 wiersz TEST, nazwy z tabeli niżej),
   * `tests/unit/` — testy modułów (`test_<moduł>.py`),
   * `tests/property/` — niezmienniki i właściwości,
-  * `tests/integration/` — CLI, pliki wyjściowe, dane staged (`realdata`),
+  * `tests/integration/` — CLI, pliki wyjściowe, dane clean-room (`realdata`: od sesji 15 kanoniczne
+    akcje i dywidendy; testy mechaniki z wartościami staged przypinają staged proxy jawnie),
   * `tests/fixtures/` — budowniczowie syntetycznych serii w kodzie (`builders.py`) + małe CSV;
     dane z `input/` są tylko czytane.
 * Fixture'y syntetyczne mają jawne ceny/zwroty i ręcznie policzone oczekiwania w komentarzu.
@@ -60,7 +61,7 @@ requirement ID; mapa wymaganie → test jest w `work/compliance_matrix.csv` (kol
 | TEST-035 | fundacja: koszt 40 000 wg timingu i proration | tests/spec/test_tax_foundation_spec.py::test_foundation_admin_cost | run 2018-03..2020-06: 2018 proporcjonalnie, płatne w 1. tygodniu 2019; 2019 pełne w 1. tygodniu 2020; 2020 proporcjonalnie w terminalu; brak dla none/individual | FND-010, FND-011, FND-012, FND-014 | Q-034 |
 | TEST-036 | Sharpe/Sortino/Calmar wg wzorów | tests/spec/test_metrics_spec.py::test_metric_conventions | zwroty [0.01, −0.02, 0.015, 0.0, −0.005], RF 0.0005/tydz.; wartości oczekiwane policzone ręcznie w fixture | MET-006..MET-010 | Q-040 |
 | TEST-037 | WF continuous_state | tests/spec/test_walk_forward_spec.py::test_state_continuity_between_windows | dwa okna OOS; otwarte loty i bucket straty na granicy → przeniesione; NAV ciągły; należność za rok przełomu zapłacona raz | WF-004, WF-013 | Q-022 |
-| TEST-038 | plik dywidend: ciągła seria Friday od 1970-01-02 | tests/spec/test_parsers_spec.py::test_dividend_input_file | staged plik od 1970-01-02: piątki, brak luk, wzór ≤1e-12, statusy ∈ {actual, estimate} | DIV-012, SEM-007 | Q-008 |
+| TEST-038 | plik dywidend: ciągła seria Friday od 1970-01-02 | tests/spec/test_parsers_spec.py::test_dividend_input_file_canonical; tests/spec/test_parsers_spec.py::test_dividend_input_file | prawdziwy plik kanoniczny `SPX_dividend_return_weekly_1970_2026.csv` (sesja 15, Q-008 RESOLVED) przez domyślną rozdzielczość i adapter canonical: 1970-01-02..2026-09-18, 2960 piątków, krok 7 dni, brak luk/duplikatów, kolumny SCHEMA-005, wzór (błąd 0.0), actual do 2025-12-26, estimate 2026; przypadki syntetyczne walidatora (błąd wzoru, luka) | DIV-012, SEM-007 | Q-008 |
 | TEST-039 | plik BTC: ciągła seria calendar-week z Sunday close | tests/spec/test_parsers_spec.py::test_btc_input_file | staged BTC po normalizacji (Q-005/Q-006): klucz piątek, close niedziela, delta 2, weekly_return = iloraz, 794 wiersze 2011-07-08..2026-09-18; osobno test surowej konwencji poniedziałkowej | SCHEMA-004, SEM-008 | Q-005, Q-006 |
 | TEST-040 | domyślne progi | tests/spec/test_signals_spec.py::test_default_thresholds | domyślny config: stocks 0, gold 0, btc 0.03; dodatkowe aktywo XYZ → 0.03 | SIG-004, DEF-003, DEF-030..032 | — |
 | TEST-041 | stan początkowy z historii, split RISK_OFF | tests/spec/test_signals_spec.py::test_initial_state_reconstruction | historia kończąca się RISK_OFF → sleeve 50/50 (sell_fraction 0.5) bez transakcji na starcie; brak resetu do RISK_ON | SIG-003, SIG-018 | Q-012, Q-019 |

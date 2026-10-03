@@ -1,4 +1,5 @@
-"""TEST-027, TEST-028, TEST-038, TEST-039, TEST-044."""
+"""TEST-027, TEST-028, TEST-038 (synthetic validator cases and the real canonical file), TEST-039,
+TEST-044."""
 import datetime as dt
 import zipfile
 
@@ -8,7 +9,6 @@ from fixtures.builders import STAGED, ff_text, write_csv
 from src.config import ResolvedConfig
 from src.data_loader import load_btc, load_cpi, load_dividend, load_ff, load_role
 from src.errors import DataValidationError, MissingColumns
-from src.models import Severity
 from src.validation import validate_btc_canonical, validate_dividend_series
 
 D = dt.date.fromisoformat
@@ -53,10 +53,11 @@ def canonical_dividend_rows(n=6, start="1970-01-02"):
 
 
 def test_dividend_input_file(tmp_path):
-    """TEST-038 / DIV-012, SCHEMA-005: a canonical file validates as continuous Friday weekly
-    series with correct formula. The staged Shiller file is only a non-canonical proxy (Q-008):
-    the canonical loader rejects it; its proxy load is continuous from 1970-01-02 but is never
-    canonical evidence."""
+    """TEST-038 / DIV-012, SCHEMA-005 validator cases: a canonical file validates as continuous
+    Friday weekly series with correct formula; a formula error and a gap are reported. The
+    superseded staged Shiller file is only a non-canonical proxy: the canonical loader rejects
+    it; its proxy load is never canonical evidence. The real canonical file:
+    test_dividend_input_file_canonical."""
     cols = ["date", "dividend_return", "dividend_points", "spx_close_prev", "spx_close", "year",
             "annual_yield_pct", "trailing_dps_points", "status"]
     good = load_dividend(write_csv(tmp_path / "div.csv", cols, canonical_dividend_rows()))
@@ -76,6 +77,45 @@ def test_dividend_input_file(tmp_path):
     proxy = load_dividend(staged, adapter="shiller_proxy")
     assert proxy.provenance.canonical is False
     assert validate_dividend_series(proxy, from_date=D("1970-01-02")) == []
+
+
+def test_dividend_input_file_canonical():
+    """TEST-038 / SCHEMA-005 / SEM-007 / DIV-012 on the real canonical file
+    input/data/SPX_dividend_return_weekly_1970_2026.csv through the default resolution and the
+    canonical adapter (no fixture, no shiller_proxy): exactly the SCHEMA-005 columns, Friday
+    weekly 1970-01-02..2026-09-18 (2960 rows, exact +7 days, no gaps or duplicates), year ==
+    date.year, positive values, dividend_return == dividend_points / spx_close_prev, statuses
+    actual through 2025-12-26 and estimate for 2026."""
+    import csv
+    cfg = ResolvedConfig()
+    s = load_role(cfg, "dividend")
+    pv = s.provenance
+    assert pv.path.endswith("SPX_dividend_return_weekly_1970_2026.csv")
+    assert pv.canonical and pv.adapter == "canonical" and not pv.resolved_via_alias
+    assert pv.issues == () and pv.warnings == ()
+    assert validate_dividend_series(s) == []                  # Friday, continuity, formula, statuses
+    with open(pv.path, encoding="utf-8", newline="") as f:
+        rows = list(csv.DictReader(f))
+    assert list(rows[0]) == ["date", "dividend_return", "dividend_points", "spx_close_prev", "spx_close",
+                             "year", "annual_yield_pct", "trailing_dps_points", "status"]
+    keys = [p.week_key for p in s.points]
+    assert (keys[0], keys[-1], len(keys), pv.raw_rows) == (D("1970-01-02"), D("2026-09-18"), 2960, 2960)
+    assert all(k.weekday() == 4 for k in keys) and len(set(keys)) == len(keys)
+    assert {(b - a).days for a, b in zip(keys, keys[1:])} == {7}
+    assert all(int(r["year"]) == D(r["date"]).year for r in rows)
+    numeric = ["dividend_return", "dividend_points", "spx_close_prev", "spx_close", "annual_yield_pct",
+               "trailing_dps_points"]
+    assert all(float(r[c]) > 0 for r in rows for c in numeric)
+    err = max(abs(p.dividend_return - p.dividend_points / p.spx_close_prev) / p.dividend_return
+              for p in s.points)
+    assert err <= 1e-9                                         # observed: 0.0
+    by = {p.week_key: p for p in s.points}
+    assert all(by[k].spx_close_prev == float(r["spx_close"])   # spx_close chains to the next prev
+               for k, r in zip(keys[1:], rows))
+    assert dict(pv.extra)["status_blocks"] == (("actual", D("1970-01-02"), D("2025-12-26")),
+                                               ("estimate", D("2026-01-02"), D("2026-09-18")))
+    assert dict(pv.extra)["status_counts"] == (("actual", 2922), ("estimate", 38))
+    assert all((p.status == "estimate") == (p.week_key.year == 2026) for p in s.points)
 
 
 def test_btc_input_file():

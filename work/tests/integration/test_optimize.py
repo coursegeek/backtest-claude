@@ -1,5 +1,5 @@
-"""In-sample optimize end to end on the staged data (mechanics validation - stocks, gold and
-dividends are staged proxies, Q-002/Q-004/Q-008): OPT-001..010, TEST-009, CLI-004/005,
+"""In-sample optimize end to end on the clean-room data (canonical stock signal and dividend
+files since Q-004/Q-008; gold is the staged Q-002 proxy): OPT-001..010, TEST-009, CLI-004/005,
 ERR-005/006, REPRO-006, Q-041."""
 import csv
 import json
@@ -328,9 +328,12 @@ def test_cli_005_exact_command(tmp_path):
     assert {x["tax_profile"] for x in rows} == {"individual_pl"}
     assert {x["relevant_drawdown_metric"] for x in rows} == {"after_tax_max_drawdown"}
     ends = {x["effective_last_week"] for x in rows}
-    assert ends == {"2026-06-26"}                                 # dividend-constrained calendar
+    assert ends == {"2026-07-31"}               # canonical dividends (to 2026-09-18) keep --end
     m = json.loads((out / "optimizer_manifest.json").read_text(encoding="utf-8"))
     assert "dividend" in {s["role"] for s in m["sources"]}
-    assert m["effective_last_week"] == "2026-06-26"
+    assert m["effective_last_week"] == "2026-07-31"
+    data = json.loads((out / "data_manifest.json").read_text(encoding="utf-8"))
+    div = next(s for s in data["sources"] if s["role"] == "dividend")
+    assert div["canonical"] and not div["resolved_via_alias"] and div["last_key"] == "2026-09-18"
     sel = next(x for x in rows if x["selected"] == "true")
     assert float(sel["after_tax_cagr"]) < float(sel["cagr"])
