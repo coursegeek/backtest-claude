@@ -121,6 +121,17 @@ DISTRIBUTION_FIELDS = ["row_index", "scheduled_date", "nominal_week", "actual_we
                        "tax", "net", "basis_before", "basis_after"]
 
 
+ROLLING_FIELDS = ["horizon_years", "window_start", "window_end", "elapsed_days", "weeks",
+                  "pre_tax_start_nav", "pre_tax_end_nav", "pre_tax_total_return", "pre_tax_cagr",
+                  "pre_tax_max_drawdown", "after_tax_start_nav", "after_tax_end_nav",
+                  "after_tax_total_return", "after_tax_cagr", "after_tax_max_drawdown"]  # MET-022/023
+
+
+def rolling_rows(rolling) -> list:
+    """rolling_metrics.csv rows of already computed windows (horizon, then window_end order)."""
+    return [{k: getattr(w, k) for k in ROLLING_FIELDS} for w in rolling.windows]
+
+
 def tax_event_rows(events) -> list:
     rows = []
     for e in events:

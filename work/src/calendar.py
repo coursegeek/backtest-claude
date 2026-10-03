@@ -51,6 +51,15 @@ def last_key_on_or_before(day: dt.date) -> dt.date:
     return k if k <= day else k - WEEK
 
 
+def add_years(day: dt.date, years: int) -> dt.date:
+    """Calendar-year shift; 29 February maps to 28 February in a common year (walk-forward
+    windows, rolling metrics)."""
+    try:
+        return day.replace(year=day.year + years)
+    except ValueError:
+        return day.replace(year=day.year + years, day=28)
+
+
 def weekly_grid(first: dt.date, last: dt.date) -> list:
     out, k = [], first
     while k <= last:

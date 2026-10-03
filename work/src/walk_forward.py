@@ -48,7 +48,7 @@ from .allocation import strategic_targets
 from .app import (PortfolioRunResult, PreTaxRun, PreparedRun, build_hooks, check_supported_run,
                   distribution_ignored_issues, find_tax_hooks, needs_distribution_schedule,
                   prepare_run, prepared_input_sha256, write_portfolio_outputs)
-from .calendar import elapsed_days, inception_date, last_key_on_or_before
+from .calendar import add_years, elapsed_days, inception_date, last_key_on_or_before
 from .config import ResolvedConfig, int_grid, parse_decimal_grid
 from .engine import EngineResult, EngineStart, run_engine
 from .errors import BacktestError, ConfigError, InsufficientHistoryError
@@ -101,14 +101,6 @@ class WalkForwardError(BacktestError):
 
 
 # ============================================================================ dates
-def add_years(day: dt.date, years: int) -> dt.date:
-    """Calendar-year shift; 29 February maps to 28 February in a common year."""
-    try:
-        return day.replace(year=day.year + years)
-    except ValueError:
-        return day.replace(year=day.year + years, day=28)
-
-
 def step_rule(step_years: float) -> tuple:
     """WF-012 (Q-022): an integer step is calendar years; any other step is
     round_half_up(step_years * 365.2425) calendar days. Returns (kind, amount)."""

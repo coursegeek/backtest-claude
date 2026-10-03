@@ -64,7 +64,7 @@ SCAN_FIELDS = ["scan_type", "grid_index", "asset", "scanned_parameter", "scanned
                "rebalance_count", "signal_exit_count", "signal_reentry_count"]
 GRID_FIELDS = SCAN_FIELDS + list(SUMMARY_FIELDS)
 # resolved keys that never influence results (excluded from the strategy hash)
-NON_STRATEGY_PREFIXES = ("report.", "config.", "performance.")
+NON_STRATEGY_PREFIXES = ("report.", "config.", "performance.", "metrics.rolling_")
 
 
 class ScanError(BacktestError):

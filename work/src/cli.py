@@ -228,7 +228,14 @@ def main(argv=None) -> int:
             return 0
         result = app.dispatch(cfg)
         if result is not None and getattr(result, "output_dir", None):
-            print(f"outputs written to {result.output_dir}")
+            # REP-011: the console table (presentation of computed results) replaces the plain
+            # "outputs written to" line unless report.console is false or there is no table
+            from . import console
+            text = console.render(cfg, result) if cfg.get("report.console") else None
+            if text:
+                sys.stdout.write(text)
+            else:
+                print(f"outputs written to {result.output_dir}")
         return 0
     except BacktestError as exc:
         print(f"error: {exc}", file=sys.stderr)

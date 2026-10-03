@@ -24,7 +24,7 @@ DIVIDENDS = ["--dividend-tax-mode", "smoothed_weekly", "--dividend-file",
 DETERMINISTIC = ["summary.csv", "weekly_portfolio.csv", "trades.csv", "tax_events.csv",
                  "payments.csv", "rf_transfers.csv", "rebalance_events.csv", "signals.csv",
                  "realizations.csv", "dividend_reinvestments.csv", "config_resolved.yaml",
-                 "weekly_normalized.csv", "validation_report.csv"]
+                 "weekly_normalized.csv", "validation_report.csv", "rolling_metrics.csv"]
 PROFILE_FILES = {"none": ["tax_state.json"],
                  "individual_pl": ["tax_state.json", "terminal_settlement.json"],
                  "family_foundation_19": ["foundation_state.json", "terminal_settlement.json"]}

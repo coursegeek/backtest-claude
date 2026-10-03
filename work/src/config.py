@@ -87,7 +87,9 @@ DEFAULTS: dict = {
         "foundation_15": {"distribution_rate": 0.15},
         "foundation_19": {"distribution_rate": 0.19},
     },
-    "metrics": {"sortino_mar_annual": 0.0},
+    "metrics": {"sortino_mar_annual": 0.0,
+                "rolling_returns": [1, 3, 5, 10],          # MET-022 horizons (calendar years)
+                "rolling_stats": True},                    # MET-023 rolling CAGR / max drawdown
     "optimizer": {"btc_weight": [i / 100 for i in range(26)],
                   "gold_weight": [i / 100 for i in range(26)], "stocks_weight": "remainder",
                   "rf_weight": 0.0, "objective": "after_tax_cagr", "max_drawdown_limit": None,
@@ -96,7 +98,7 @@ DEFAULTS: dict = {
                   "tie_break": ["objective", "lower_maxDD", "lower_turnover",
                                 "lexicographic_weights"]},
     "performance": {"jobs": "auto", "progress": True, "cache": False},      # ERR-006: auto
-    "report": {"output_dir": "results", "run_name": "run"},
+    "report": {"output_dir": "results", "run_name": "run", "console": True},  # REP-011
 }
 
 # Q-027: command specific defaults layered between DEFAULTS and the config file.
@@ -115,6 +117,8 @@ COMMAND_DEFAULTS: dict = {
                                                  "family_foundation_19"]},
                     "report": {"run_name": "tax_compare"}},
 }
+
+ROLLING_HORIZONS = (1, 3, 5, 10)                    # MET-022 allowed values (years)
 
 ENUMS = {
     "engine.frequency": {"weekly"},
@@ -529,6 +533,14 @@ def validate(cfg: ResolvedConfig) -> None:
     asset = cfg.get("run.asset")
     if asset is not None and asset not in RISKY_ASSETS:
         raise ConfigError(f"run.asset: {asset!r} not in stocks,gold,btc")
+    horizons = cfg.get("metrics.rolling_returns")
+    if (not isinstance(horizons, (list, tuple)) or not horizons
+            or any(isinstance(h, bool) or h not in ROLLING_HORIZONS for h in horizons)):
+        raise ConfigError(f"metrics.rolling_returns: a non-empty list of horizons in years from "
+                          f"{sorted(ROLLING_HORIZONS)}, got {horizons!r} (MET-022)")
+    for key in ("metrics.rolling_stats", "report.console"):
+        if not isinstance(cfg.get(key), bool):
+            raise ConfigError(f"{key} must be true or false, got {cfg.get(key)!r}")
     jobs = cfg.get("performance.jobs")
     if not (jobs == "auto" or (isinstance(jobs, int) and not isinstance(jobs, bool)
                                and (jobs >= 1 or jobs == -1))):

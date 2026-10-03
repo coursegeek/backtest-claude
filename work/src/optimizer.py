@@ -625,7 +625,8 @@ def _write(res: OptimizerResult, out: Path, ts) -> None:
         "sources": [{"role": p.role, "path": p.path, "sha256": p.sha256}
                     for p in sorted(prep.provenances, key=lambda p: p.role)],
         "base_strategy_sha256": _sha({k: v for k, v in flatten(base.resolved_dict()).items()
-                                      if not k.startswith(("report.", "config.", "performance."))}),
+                                      if not k.startswith(("report.", "config.", "performance.",
+                                                            "metrics.rolling_"))}),
         "checks": optimizer_checks(res),
         "outputs": {"grid_results": "grid_results.csv (every combination in grid_index order; "
                                     "rejected combinations with empty metrics)",

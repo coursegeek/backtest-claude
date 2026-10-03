@@ -42,7 +42,8 @@ from .manifest import build_manifest, run_timestamp
 from .costs import CostModel
 from .engine import ComposedHooks, EngineInputs, WeekMarket, run_engine
 from .rebalancing import hooks_from_config
-from .metrics import PathSeries, RunMetrics, compute_run_metrics, cpi_window
+from .metrics import (ROLLING_WINDOW_START_RULE, PathSeries, RollingMetrics, RunMetrics,
+                      compute_run_metrics, cpi_window, rolling_metrics)
 from .foundation import (FOUNDATION_PROFILES, SCHEDULE, FoundationHooks, FoundationParams,
                          FoundationState, map_distribution_schedule)
 from .settlement import (ShadowCostSettlement, TerminalSettlementResult, settle_foundation,
@@ -51,10 +52,10 @@ from .tax import IndividualTaxHooks, TaxState, tax_hooks_from_config
 from .models import RISKY_ASSETS, Severity, ValidationIssue, canonical_assets
 from .reporting import (SUMMARY_FIELDS, summary_row,
                         DISTRIBUTION_FIELDS, DIVIDEND_FIELDS, NORMALIZED_FIELDS, PAYMENT_FIELDS, REALIZATION_FIELDS,
-                        REBALANCE_FIELDS, SIGNAL_FIELDS, TAX_EVENT_FIELDS, TRADE_FIELDS,
-                        TRANSFER_FIELDS, VALIDATION_FIELDS, dividend_rows, rebalance_rows,
-                        realization_rows, record_rows, tax_event_rows, terminal_settlement_doc,
-                        distribution_rows,
+                        REBALANCE_FIELDS, ROLLING_FIELDS, SIGNAL_FIELDS, TAX_EVENT_FIELDS,
+                        TRADE_FIELDS, TRANSFER_FIELDS, VALIDATION_FIELDS, dividend_rows,
+                        rebalance_rows, realization_rows, record_rows, rolling_rows,
+                        tax_event_rows, terminal_settlement_doc, distribution_rows,
                         normalized_price_rows, normalized_return_rows, run_directory,
                         signal_rows, trade_rows, weekly_portfolio_fields, weekly_portfolio_rows,
                         write_csv, write_json)
@@ -191,6 +192,7 @@ class PortfolioRunResult:
     walk_forward: Optional[dict] = None             # summary fields of a stitched OOS path
     targets_by_week: Optional[dict] = None          # walk-forward: targets in force per week
     assets: Optional[tuple] = None                  # walk-forward: union of the OOS assets
+    rolling: Optional[RollingMetrics] = None        # MET-022/023, computed when outputs are written
 
 
 @dataclass(frozen=True)
@@ -833,6 +835,26 @@ def run_prepared(cfg: ResolvedConfig, prepared: PreparedRun, write: bool = True,
     return out
 
 
+def rolling_for(cfg: ResolvedConfig, res: PortfolioRunResult) -> RollingMetrics:
+    """MET-022/MET-023 on the two weekly paths of a run result (pre-tax shadow, actual
+    after-tax; the walk-forward result carries the stitched OOS paths); terminal settlement is
+    never part of either path (MET-025/MET-026)."""
+    return rolling_metrics(PathSeries.from_engine(res.pre_tax.engine), PathSeries.from_engine(res.engine),
+                           horizons=cfg.get("metrics.rolling_returns"),
+                           stats=cfg.get("metrics.rolling_stats"))
+
+
+def rolling_manifest(rolling: RollingMetrics) -> dict:
+    return {"file": "rolling_metrics.csv", "horizons_years": list(rolling.horizons_years),
+            "window_start_rule": ROLLING_WINDOW_START_RULE,
+            "calendar_target": "window_end minus N calendar years (29 Feb -> 28 Feb)",
+            "paths": {"pre_tax": "pre-tax shadow weekly NAV path",
+                      "after_tax": "actual weekly NAV path (current taxes and costs)"},
+            "terminal_settlement_included": False, "rolling_stats": rolling.stats,
+            "rows_per_horizon": {str(h): len(rolling.for_horizon(h)) for h in rolling.horizons_years},
+            "sort_order": "horizon_years, window_end ascending"}
+
+
 FOUNDATION_LIMITATIONS = [
     "tax.foundation.internal_trading_tax_rate > 0 together with tax_event=distribution_schedule "
     "is not defined by the clean-room specification adjudication (Q-037/Q-047): ConfigError",
@@ -912,6 +934,8 @@ def write_portfolio_outputs(cfg: ResolvedConfig, res: PortfolioRunResult,
     else:
         write_json(out / "tax_state.json", tax_doc)
     write_csv(out / "summary.csv", SUMMARY_FIELDS, [summary_row(cfg, res)])
+    res.rolling = rolling_for(cfg, res)                         # MET-022/023
+    write_csv(out / "rolling_metrics.csv", ROLLING_FIELDS, rolling_rows(res.rolling))
     manifest = build_manifest(res.provenances, res.as_of, ts, cfg.command)
     manifest.update({
         "dropped_incomplete_weeks": res.dropped_incomplete_weeks,
@@ -931,14 +955,15 @@ def write_portfolio_outputs(cfg: ResolvedConfig, res: PortfolioRunResult,
         "audit_outputs": ["payments.csv", "rf_transfers.csv", "rebalance_events.csv",
                           "tax_events.csv", "realizations.csv", "dividend_reinvestments.csv",
                           "foundation_state.json" if isinstance(res.tax_state, FoundationState)
-                          else "tax_state.json"] + (["terminal_settlement.json"] if t else []),
+                          else "tax_state.json"] + (["terminal_settlement.json"] if t else [])
+                         + ["rolling_metrics.csv"],
+        "rolling_metrics": rolling_manifest(res.rolling),
         "terminal_settlement": (f"{cfg.get('tax.profile')}: separate from the weekly path" if t
                                 else "none: no terminal settlement (after_tax_terminal_wealth = "
                                 "pre_terminal_nav, Q-032)"),
         "pre_tax_method": res.pre_tax.method,
         "pre_tax_note": res.pre_tax.note,
         **initial_state_manifest(cfg, res.report),
-        "not_implemented_outputs": ["rolling_metrics.csv (MET-022/023, SHOULD)"],
     })
     if isinstance(res.tax_state, FoundationState):
         manifest["foundation_tax_event"] = res.tax_params.tax_event

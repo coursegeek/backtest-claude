@@ -100,13 +100,19 @@ requirement ID; mapa wymaganie → test jest w `work/compliance_matrix.csv` (kol
 | test_settlement.py | kolejność terminalna, bazy dystrybucji, warstwy fundacji |
 | test_rebalancing.py | tryby, zachowanie splitu, targety na sumach sleeve'ów |
 | test_engine.py | kolejność kroków (trace), brak transakcji przed startem, re-entry tylko z rezerwy, brak powtórnej sprzedaży, podatek zmniejsza NAV w tygodniu płatności |
-| test_metrics.py | każdy wzór MET-* na ręcznych danych, turnover, lata kalendarzowe, rolling |
-| test_reporting.py | kolumny i formatowanie, tabela konsolowa, etykieta CPI |
+| test_metrics.py | każdy wzór MET-* na ręcznych danych, turnover, lata kalendarzowe |
+| test_rolling_metrics.py | MET-022/023 (sesja 16): okna kalendarzowe (29 II -> 28 II, start = ostatni punkt <= target, luka bez fill, brak okien częściowych), ręcznie policzony 1Y, DD okna (start w running max), stały CAGR, tie-break najgorszego okna, no-lookahead |
+| test_reporting.py | kolumny i formatowanie, etykieta CPI (tabela konsolowa REP-011: `tests/integration/test_rolling_console.py`) |
 | test_optimizer.py | parser zakresów, gridy, cele, limit DD, tie-break, progres |
 | test_walk_forward.py | konstrukcja okien rolling/anchored, krok, ostatnie okno, parametry optymalizowane vs stałe |
 | test_architecture.py | granice modułów (tax nie importuje engine, signals nie importuje CPI), brak `work/src` w sys.path |
 
 ## 4. Testy integracyjne (tests/integration)
+
+* `test_rolling_console.py` (sesja 16): `rolling_metrics.csv` w `run`, profilach `tax-compare`,
+  `selected/` optimize i sklejonym OOS walk-forward (okna przez granice = jeden ciągły run), brak
+  plików w scanach, wykluczenie terminal settlement (fundacja 15 vs 19), konfiguracja horyzontów,
+  determinizm; tabela REP-011 z CLI, `report.console=false`, cisza wywołań bibliotecznych.
 
 * `test_cli.py`: CLI-001..011 (na fixture'ach lub danych staged z markerem `realdata`), w tym
   oczekiwane błędy: CLI-007 bez wag (Q-024), CLI-011 na danych staged (Q-020), S06 bez wag (Q-023; sesja 9: S06 używa zamrożonego configu V2, `tax-compare` bez wag nadal daje ALLOC-001).

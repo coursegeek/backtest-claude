@@ -145,3 +145,18 @@ def test_reporting_is_a_separate_layer():
     for word in ("compute_run_metrics", "run_engine", "load_role", "settle_terminal",
                  "settle_foundation", "close_tax_year", "plan_rebalance"):
         assert word not in text, word
+
+
+def test_console_is_a_presentation_layer():
+    """REP-011: the console tables only format already computed results (summary rows and
+    rolling windows); only the CLI uses them, no computational or library layer prints them."""
+    assert imports("console") <= {"reporting"}
+    text = (SRC / "console.py").read_text(encoding="utf-8")
+    for word in ("run_engine", "load_role", "compute_run_metrics", "rolling_metrics(", "cagr(",
+                 "max_drawdown(", "settle_", "print("):
+        assert word not in text, word
+    for mod in ("engine", "metrics", "reporting", "app", "tax_compare", "optimizer", "scans",
+                "walk_forward", "tax", "foundation", "settlement", "manifest"):
+        assert "console" not in imports(mod), mod
+    assert "console" in (SRC / "cli.py").read_text(encoding="utf-8")
+

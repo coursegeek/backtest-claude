@@ -385,8 +385,17 @@ Wiersz MUST nadal `BLOCKED` (dane niekanoniczne): SEM-003 (Q-002, LBMA Gold PM).
   DIV-011, SEM-011 na prawdziwym tygodniu 2026-09-25). SEM-001, SCHEMA-005, SEM-007, TEST-038
   PASS; Q-004, Q-008, Q-010 RESOLVED; Q-002 pozostaje DATA_BLOCKER.
 
+* Sesja 16 (tylko warstwy metryk, raportowania i prezentacji CLI; bez zmian silnika, podatków,
+  fundacji, settlementu, optymalizacji, walk-forward i danych): `rolling_metrics.csv` (MET-022
+  najgorsze okna 1/3/5/10 lat kalendarzowych, MET-023 rolling CAGR i max drawdown) na ścieżce
+  pre-tax (shadow) i after-tax (rzeczywista tygodniowa, bez terminal settlement) dla `run`,
+  profili `tax-compare`, wybranego kandydata `optimize` i sklejonej ścieżki OOS walk-forward;
+  tabela w terminalu REP-011 (`report.console`, `src/console.py`, tylko CLI). MET-022, MET-023,
+  REP-011 PASS; pozostałe SHOULD nie-PASS: DATA-009 (MAPPED), DIV-009 (IN_PROGRESS), ERR-007
+  (PROPOSED_DEFERRAL). Istniejące wyniki (summary.csv i pozostałe artefakty) bez zmian.
+
 Stan macierzy: MUST — 351 `PASS`, 0 `IN_PROGRESS`, 0 `MAPPED`, 1 `BLOCKED` (DATA BLOCKER:
-SEM-003, Q-002), 0 `FAIL`; SHOULD — 21 `PASS`. Testy: `python -m pytest work` (wszystkie
+SEM-003, Q-002), 0 `FAIL`; SHOULD — 24 `PASS`. Testy: `python -m pytest work` (wszystkie
 przechodzą). SEM-003 nie został oznaczony `PASS` na podstawie staged złota (proxy TVC/OANDA);
 dowody mechaniki LBMA pochodzą z syntetycznych fixture'ów. `freeze_v2.py` nie był uruchamiany.
 
@@ -416,5 +425,5 @@ resolved_ids=Q-004,Q-005,Q-006,Q-008,Q-010,Q-011,Q-012,Q-013,Q-014,Q-015,Q-016,Q
 open_questions=12
 must_fail=0
 must_in_progress=0
-should_pass=21
+should_pass=24
 -->

@@ -48,10 +48,11 @@ SHARED_STATEMENT = ("all profiles used the same prepared market/calendar inputs:
                     "reloaded or realigned any source")
 # keys that may differ between the configurations of the compared profiles
 PROFILE_KEYS = ("tax.profile",)
-# resolved keys that never influence results (output location, run label, config metadata,
-# execution settings, the profile axis): excluded from resolved_strategy_sha256
-NON_STRATEGY_PREFIXES = ("report.", "config.", "performance.", "tax.compare_profiles",
-                         "tax.profile")
+# resolved keys that never influence results (output location, run label, console, config
+# metadata, execution settings, rolling-window reporting, the profile axis): excluded from
+# resolved_strategy_sha256
+NON_STRATEGY_PREFIXES = ("report.", "config.", "performance.", "metrics.rolling_",
+                         "tax.compare_profiles", "tax.profile")
 
 
 class TaxCompareError(BacktestError):

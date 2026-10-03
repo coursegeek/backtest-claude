@@ -295,7 +295,7 @@ def test_outputs_manifest_and_journals(tmp_path):
         "config_resolved.yaml", "data_manifest.json", "weekly_normalized.csv", "realizations.csv",
         "dividend_reinvestments.csv", "tax_state.json", "terminal_settlement.json",
         "walk_forward_results.csv", "training_grid_results.csv", "walk_forward_manifest.json",
-        "walk_forward_boundary_events.csv"}
+        "walk_forward_boundary_events.csv", "rolling_metrics.csv"}      # MET-022/023: stitched OOS
     rows = read_csv(out / "walk_forward_results.csv")
     assert list(rows[0]) == wf.RESULT_FIELDS and len(rows) == 3
     for r, sel, w in zip(rows, res.selections, res.windows):

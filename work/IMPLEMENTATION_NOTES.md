@@ -17,8 +17,9 @@ walk-forward (`src/walk_forward.py`). Sesja 13 domknęła tanie MUST przed decyz
 (CLI-001/007/008/009, TEST-020, TEST-023; Q-011/013/024/025/038 RESOLVED) bez nowej
 funkcjonalności silnika.
 Sesja 14 domknęła ostatnie MUST `IN_PROGRESS`: niezerowy internal trading tax fundacji (Q-047)
-i `tax.foundation.tax_event=distribution_schedule` (Q-037). Nie ma jeszcze (SHOULD):
-rolling_metrics.csv (MET-022/023), tabela konsolowa (REP-011), `spread_annual_dps` (DIV-009).
+i `tax.foundation.tax_event=distribution_schedule` (Q-037). Sesja 16 dodała `rolling_metrics.csv`
+(MET-022/023) i tabelę w terminalu (REP-011, punkty 139–147). Nie ma (SHOULD, jawnie):
+DATA-009 (dodatkowe aktywa), runtime `spread_annual_dps` (DIV-009), cache (ERR-007).
 Jedynym niezdefiniowanym przypadkiem jest kombinacja `distribution_schedule` z niezerowym internal
 trading tax (ConfigError, punkt 126). Sesja 15 zamknęła Q-004 i Q-008 wyłącznie nowymi danymi
 kanonicznymi (sygnał akcji Schwert < 1928 + SPX ≥ 1928 i plik dywidend SCHEMA-005, punkty
@@ -1052,4 +1053,81 @@ Warstwy: `models`, `errors`, `config`, `calendar`, `availability`, `data_loader`
     `incomplete_week_dropped`, jak dla innych źródeł). Bez wpływu liczbowego (tygodnie po końcu
     kalendarza nigdy nie były używane); test regresyjny
     `test_dividend_range_follows_norm019_completion` (pada bez poprawki).
+
+## Rolling metrics i tabela w terminalu (sesja 16)
+
+139. **MET-022/MET-023 - ścieżki**: rolling liczony czystymi funkcjami `metrics.rolling_metrics`
+    na istniejących `PathSeries` tych samych dwóch ścieżek co metryki pełnego runu: pre-tax =
+    tygodniowa ścieżka NAV runu cienia (Q-015), after-tax = rzeczywista tygodniowa ścieżka NAV
+    (bieżące podatki dywidendowe/RF, roczne podatki płacone w ścieżce tygodniowej, sell_to_pay,
+    koszty transakcyjne i slippage, koszty fundacji, wypłaty harmonogramu Q-037, roczny internal
+    trading tax). Terminal settlement (likwidacja, terminalny CG, danina, podatek od dystrybucji)
+    nie należy do żadnej ścieżki rolling (MET-025/MET-026). Punkty ścieżki: punkt 0 = (inception =
+    pierwszy tydzień - 7 dni, NAV_start = start ścieżki tygodniowej; dla fundacji po setup cost,
+    Q-033), punkt k = (tydzień k, nav_end) - ta sama ścieżka co drawdown MET-009; NAV nie jest
+    odtwarzany ze zwrotów.
+140. **Okno kalendarzowe**: horyzonty 1/3/5/10 lat kalendarzowych (`metrics.rolling_returns`,
+    dozwolone 1, 3, 5, 10), nie 52/156/260/520 tygodni. Dla każdego punktu końca `window_end`:
+    `target_start = window_end - N lat kalendarzowych` (`calendar.add_years`, 29 lutego -> 28
+    lutego, ta sama funkcja co w walk-forward, przeniesiona bez zmian do `calendar.py`);
+    `window_start` = ostatni punkt ścieżki z datą <= target_start (bisect; brak interpolacji,
+    brak forward-fill brakującego tygodnia, nigdy punkt po targecie). Okno istnieje tylko, gdy
+    taki punkt istnieje - brak okien częściowych; run krótszy od horyzontu nie ma wierszy tego
+    horyzontu (worst = None, w konsoli `n/a`, bez ostrzeżenia). `elapsed_days = window_end -
+    window_start` (przez wyrównanie do piątków zwykle 364-371 dni dla 1Y, więcej przy luce
+    kalendarza); `weeks` = liczba zachowanych interwałów tygodniowych po starcie do końca.
+141. **Wartości**: `total_return = NAV_end / NAV_start - 1` (bez annualizacji; z niego worst
+    rolling return); `cagr` = funkcja MET-003 `(NAV_end / NAV_start) ** (365.2425 /
+    elapsed_days) - 1` od rzeczywistego NAV na starcie okna (nie terminal wealth, nie
+    growth_base_nav); `max_drawdown` = MET-009 na [NAV startu okna, kolejne nav_end do końca]
+    (start w running maximum; pętla `window_max_drawdown` daje bit w bit to samo co
+    `max_drawdown(navs[i..j])`, test). Okno startujące przy NAV <= 0 (fundacja, która wypłaciła
+    cały NAV) ma puste wartości. `metrics.rolling_stats=false` zostawia puste kolumny CAGR/DD.
+    Wypłaty harmonogramu Q-037 obniżają NAV, więc mogą być widoczne jako spadek w oknie;
+    skumulowane wypłaty nie są dodawane do ścieżki rolling (terminal wealth pozostaje osobną
+    metryką).
+142. **Najgorsze okno**: `worst_rolling_return(windows, horizon, path)` - minimum
+    `total_return` danej ścieżki, porównanie dokładne (bez tolerancji), remis -> wcześniejszy
+    window_end, potem wcześniejszy window_start; None bez pełnego okna.
+143. **`rolling_metrics.csv`**: kolumny `horizon_years, window_start, window_end, elapsed_days,
+    weeks, pre_tax_start_nav, pre_tax_end_nav, pre_tax_total_return, pre_tax_cagr,
+    pre_tax_max_drawdown, after_tax_start_nav, after_tax_end_nav, after_tax_total_return,
+    after_tax_cagr, after_tax_max_drawdown`; kolejność horizon_years, window_end rosnąco; pełna
+    precyzja (repr), bez timestampu - deterministyczny (TEST-020 porównuje go bajtowo). Plik
+    powstaje w writerze standardowych artefaktów (`write_portfolio_outputs` liczy
+    `app.rolling_for` i zapisuje wynik w `PortfolioRunResult.rolling`): `run`, każdy
+    `tax-compare/profiles/<profil>/` (wspólny kalendarz, bez scalonego pliku), `optimize`
+    in-sample tylko `selected/` (nie per kandydat, nie wpływa na objective ani tie-break),
+    walk-forward tylko sklejona ścieżka OOS (nie kandydaci TRAIN ani pojedyncze segmenty).
+    Scany nie zapisują pełnych artefaktów wariantów, więc nie mają pliku rolling. Koszt: bisect
+    + jedna pętla DD na okno (~0.5 s dla 5 150 tygodni, oba ścieżki, 4 horyzonty).
+144. **Manifest**: `data_manifest.json` wymienia `rolling_metrics.csv` w `audit_outputs` i ma
+    blok `rolling_metrics` (horyzonty, reguła startu `last_path_point_on_or_before_calendar_target`,
+    target kalendarzowy, opis ścieżek, `terminal_settlement_included: false`, `rolling_stats`,
+    liczba wierszy na horyzont, kolejność); usunięto wpis `not_implemented_outputs`. Klucze
+    `metrics.rolling_*` są wyłączone z odcisków strategii (tax-compare, scany, optimizer), bo nie
+    wpływają na wyniki. `summary.csv` nie zmienia schematu ani wartości.
+145. **Walk-forward**: rolling liczony raz na sklejonej ciągłej ścieżce OOS (pre-tax shadow i
+    actual), bez resetu na granicach okien; przy stałej selekcji okna rolling są identyczne z
+    jednym ciągłym runem, w tym każde okno 1Y przecinające granicę OOS (test).
+146. **REP-011 - tabela w terminalu** (`src/console.py`, `report.console`, domyślnie true):
+    czysta warstwa prezentacji - formatuje gotowe wiersze summary (`reporting.summary_row`,
+    wiersze tax-compare / optimize / scanu) i okna rolling; niczego nie liczy, bez bibliotek
+    zewnętrznych, bez kolorów ANSI i zależności od szerokości terminala (stabilna przy
+    przekierowaniu). Emitowana wyłącznie przez CLI (`cli.main` po dispatch); wywołania
+    biblioteczne (`run_portfolio`, `run_prepared`, `run_tax_compare`, ...) nic nie wypisują na
+    stdout (test). `run`: okres, tygodnie, profil, Final wealth (`final_wealth_pre_tax` vs
+    `after_tax_terminal_wealth`), CAGR, max drawdown (`max_drawdown` vs `after_tax_max_drawdown`),
+    Sharpe, Sortino, Calmar, podatki, turnover, koszty fundacji, najgorsze okna 1/3/5/10Y (pre-tax
+    i after-tax, `n/a` bez pełnego okna), `Results: <katalog>`. `tax-compare`: jedna tabela
+    profili w kolejności kanonicznej (bez rankingu i zwycięzcy). `optimize`: wybrany kandydat
+    (wagi, objective, metryki, najgorsze okna). Walk-forward: sklejone OOS (okres, liczba okien,
+    metryki, najgorsze okna). Scany: zwięzła tabela wariantów z istniejących wierszy grid.
+    `signals`: bez tabeli. Formaty: PLN `1,234,567 PLN`, procenty `12.34%`, wskaźniki `0.82`,
+    turnover `3.96x`; artefakty CSV bez zmian precyzji. `report.console: false` (config)
+    przywraca linię `outputs written to <katalog>`; bez nowej flagi CLI.
+147. **Regresja**: istniejące wyniki bez zmian - pola `summary.csv` i pozostałe CSV/JSON
+    identyczne dla tych samych danych/configów; nowe są tylko `rolling_metrics.csv`, wpisy
+    manifestu i klucze konfiguracji (`metrics.rolling_returns`, `metrics.rolling_stats`,
+    `report.console` w `config_resolved.yaml`).
 

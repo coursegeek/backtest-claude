@@ -18,15 +18,25 @@ Pure functions on weekly paths; no I/O, no engine state. Conventions:
   * trade count and turnover: weekly-phase trades only (no terminal liquidation, no RF
     transfers, payments or dividend reinvestments); turnover = sum |gross traded value| /
     mean weekly nav_end.
+  * rolling windows (MET-022/MET-023) on the same two weekly paths (pre-tax shadow, actual
+    after-tax; never terminal settlement): path points [(inception, NAV_start), (week 1,
+    nav_end), ...]; for every window end the target start is the end minus N calendar years
+    (29 Feb -> 28 Feb) and the window starts at the last path point on or before it (no
+    interpolation, no fill, no partial window); total return = NAV_end / NAV_start - 1, CAGR
+    by the MET-003 formula over the actual elapsed days, max drawdown by MET-009 on the window
+    path (its start point included).
 Sums use math.fsum (exactly rounded, independent of order).
 """
 from __future__ import annotations
 
+import bisect
 import dataclasses
 import datetime as dt
 import math
 from dataclasses import dataclass
 from typing import Optional
+
+from .calendar import add_years
 
 DAYS_PER_YEAR = 365.2425
 WEEKS_PER_YEAR = 52
@@ -347,3 +357,122 @@ def compute_run_metrics(*, pre: PathSeries, after: PathSeries, elapsed_days: int
         terminal_trade_count=len(terminal_trades),
         terminal_traded_value=math.fsum(t.gross_traded_value for t in terminal_trades),
         risk_state_shares=risk_state_shares(week_states, assets), cpi=cpi)
+
+
+# ============================================================================ rolling windows
+ROLLING_HORIZONS_YEARS = (1, 3, 5, 10)                      # MET-022
+ROLLING_WINDOW_START_RULE = "last_path_point_on_or_before_calendar_target"
+ROLLING_PATHS = ("pre_tax", "after_tax")
+
+
+@dataclass(frozen=True)
+class RollingWindow:
+    """One full rolling window (MET-022/MET-023) on both weekly NAV paths of a run. ``weeks``
+    = retained weekly intervals after window_start through window_end. The return fields are
+    None only when the window starts at a NAV <= 0 (a fully distributed foundation path)."""
+    horizon_years: int
+    window_start: dt.date
+    window_end: dt.date
+    elapsed_days: int
+    weeks: int
+    pre_tax_start_nav: float
+    pre_tax_end_nav: float
+    pre_tax_total_return: Optional[float]
+    pre_tax_cagr: Optional[float]
+    pre_tax_max_drawdown: Optional[float]
+    after_tax_start_nav: float
+    after_tax_end_nav: float
+    after_tax_total_return: Optional[float]
+    after_tax_cagr: Optional[float]
+    after_tax_max_drawdown: Optional[float]
+
+
+@dataclass(frozen=True)
+class RollingMetrics:
+    """Every full rolling window of a run, horizon ascending then window_end ascending."""
+    horizons_years: tuple
+    windows: tuple
+    stats: bool = True              # metrics.rolling_stats: rolling CAGR and max drawdown
+
+    def for_horizon(self, horizon_years: int) -> tuple:
+        return tuple(w for w in self.windows if w.horizon_years == horizon_years)
+
+    def worst(self, horizon_years: int, path: str = "after_tax") -> Optional[RollingWindow]:
+        return worst_rolling_return(self.windows, horizon_years, path)
+
+
+def path_points(path: PathSeries) -> tuple:
+    """(dates, navs) of a weekly path: point 0 = (inception = first week - 7 days, NAV_start),
+    point k = (week k, nav_end of week k) - the drawdown path of MET-009."""
+    if not path.week_keys:
+        return (), ()
+    dates = (path.week_keys[0] - dt.timedelta(days=7),) + tuple(path.week_keys)
+    return dates, (path.nav_start,) + tuple(path.nav_ends)
+
+
+def rolling_window_bounds(dates, horizon_years: int) -> list:
+    """(start index, end index) of every full window of ``horizon_years`` calendar years over
+    ascending path dates: target = end date - horizon_years (add_years, 29 Feb -> 28 Feb);
+    start = the last point on or before the target. An end without such a point has no window
+    (no partial windows)."""
+    out = []
+    for j in range(1, len(dates)):
+        i = bisect.bisect_right(dates, add_years(dates[j], -horizon_years), 0, j) - 1
+        if i >= 0:
+            out.append((i, j))
+    return out
+
+
+def window_max_drawdown(navs, i: int, j: int) -> float:
+    """MET-009 on the window path navs[i..j] (start point included in the running maximum);
+    equal to max_drawdown(navs[i:j + 1]) without building intermediate lists."""
+    peak, worst = navs[i], 0.0
+    for k in range(i + 1, j + 1):
+        v = navs[k]
+        if v > peak:
+            peak = v
+        else:
+            d = v / peak - 1.0
+            if d < worst:
+                worst = d
+    return abs(worst)
+
+
+def _window_values(navs, i: int, j: int, elapsed: int, stats: bool) -> tuple:
+    start, end = navs[i], navs[j]
+    if not start > 0:
+        return start, end, None, None, None
+    if not stats:
+        return start, end, end / start - 1.0, None, None
+    return start, end, end / start - 1.0, cagr(end, start, elapsed), window_max_drawdown(navs, i, j)
+
+
+def rolling_metrics(pre: PathSeries, after: PathSeries, horizons=ROLLING_HORIZONS_YEARS,
+                    stats: bool = True) -> RollingMetrics:
+    """MET-022/MET-023 on the pre-tax (shadow) and after-tax (actual weekly, no terminal
+    settlement) paths of one run; both paths share the calendar and NAV_start."""
+    if pre.nav_start != after.nav_start or pre.week_keys != after.week_keys:
+        raise ValueError("pre-tax and after-tax paths must share the calendar and NAV_start")
+    dates, pre_navs = path_points(pre)
+    _, after_navs = path_points(after)
+    years = tuple(sorted(set(int(h) for h in horizons)))
+    windows = []
+    for h in years:
+        for i, j in rolling_window_bounds(dates, h):
+            elapsed = (dates[j] - dates[i]).days
+            windows.append(RollingWindow(h, dates[i], dates[j], elapsed, j - i,
+                                         *_window_values(pre_navs, i, j, elapsed, stats),
+                                         *_window_values(after_navs, i, j, elapsed, stats)))
+    return RollingMetrics(years, tuple(windows), stats)
+
+
+def worst_rolling_return(windows, horizon_years: int, path: str = "after_tax") -> Optional[RollingWindow]:
+    """MET-022: the window with the minimum total return of ``path`` (pre_tax | after_tax)
+    for one horizon; exact comparison, ties -> earlier window_end, then earlier window_start.
+    None when the run has no full window of that horizon."""
+    if path not in ROLLING_PATHS:
+        raise ValueError(f"path must be one of {ROLLING_PATHS}")
+    key = f"{path}_total_return"
+    cands = [w for w in windows if w.horizon_years == horizon_years and getattr(w, key) is not None]
+    return min(cands, key=lambda w: (getattr(w, key), w.window_end, w.window_start), default=None)
+

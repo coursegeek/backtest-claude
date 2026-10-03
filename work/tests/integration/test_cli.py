@@ -63,7 +63,7 @@ def only_dir(path):
 STANDARD = ("summary.csv", "weekly_portfolio.csv", "trades.csv", "tax_events.csv",
             "payments.csv", "rf_transfers.csv", "rebalance_events.csv", "signals.csv",
             "validation_report.csv", "config_resolved.yaml", "data_manifest.json",
-            "weekly_normalized.csv")
+            "weekly_normalized.csv", "rolling_metrics.csv")
 CLI_001 = ["run", "--weights", "stocks=0.4,gold=0.4,rf=0.2", "--start", "1971-01-01",
            "--end", "2026-07-31"]
 
